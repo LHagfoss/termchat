@@ -1,0 +1,18 @@
+[package]
+name = "termchat"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.1", features = ["derive"] }
+colored = "3.1.1"
+crossterm = "0.29.0"
+directories = "6.0.0"
+futures = "0.3.32"
+lagos_logger = { version = "0.2.10", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+toml = "1.1.2"
