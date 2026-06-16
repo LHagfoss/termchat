@@ -12,12 +12,13 @@ A fast, asynchronous, bi-directional chat server and client built entirely for t
 - **Profile Management:** Persists your username locally via config so you don't have to type it on every connection.
 - **Graceful Interruption:** Safely intercepts `Ctrl+C` to close TCP streams cleanly and alert the room before a node disconnects.
 
+## list of features
+
+- [x] server and client connection
+- [ ] persistant chat or history
+- [ ] inline chat commands (/theme, /random shi)
+- [ ] better managment with user (auth and config idk)
+
 ## Installation
 
-Ensure you have Rust and Cargo installed, then clone and build the project:
-
-```bash
-git clone [https://github.com/lhagfoss/termchat.git](https://github.com/lhagfoss/termchat.git)
-cd termchat
-cargo build --release
-```
+idk figure it out gng, probably need rust 🦀

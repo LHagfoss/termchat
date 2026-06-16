@@ -32,28 +32,35 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
 
     loop {
         tokio::select! {
-            accept_result = listener.accept() => {
-                match accept_result {
-                    Ok((stream, peer_addr)) => {
-                        logger!(Info, "Connection attempt received from {}", peer_addr);
+                    accept_result = listener.accept() => {
+                        match accept_result {
+                            Ok((stream, peer_addr)) => {
+                                logger!(Info, "Connection attempt received from {}", peer_addr);
 
-                        let state_clone = Arc::clone(&state);
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, state_clone).await {
-                                logger!(Warn, "Connection with {} dropped: {}", peer_addr, e);
+                                let state_clone = Arc::clone(&state);
+                                tokio::spawn(async move {
+                                    if let Err(e) = handle_client(stream, state_clone).await {
+                                        logger!(Warn, "Connection with {} dropped: {}", peer_addr, e);
+                                    }
+                                });
                             }
-                        });
+                            Err(e) => {
+                                logger!(Error, "Failed to accept connection: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        logger!(Error, "Failed to accept connection: {}", e);
+        _ = signal::ctrl_c() => {
+                        logger!(Info, "Stopping server...");
+
+                        let shutdown_alert = ServerToClient::SystemAlert {
+                            content: "Server is shutting down...".to_string(),
+                            timestamp: chrono::Utc::now(),
+                        };
+                        let _ = state.tx.send(shutdown_alert);
+
+                        break;
                     }
                 }
-            }
-            _ = signal::ctrl_c() => {
-                logger!(Info, "Stopping server...");
-                break;
-            }
-        }
     }
 
     logger!(Info, "Success! Stopped server successfully.");

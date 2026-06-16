@@ -73,55 +73,64 @@ pub async fn run(
 
     loop {
         tokio::select! {
-            Some(Ok(line)) = stdin.next() => {
-                print!("\x1B[1A\x1B[2K\r");
-                io::stdout().flush().unwrap();
+                    Some(Ok(line)) = stdin.next() => {
+                        print!("\x1B[1A\x1B[2K\r");
+                        io::stdout().flush().unwrap();
 
-                let chat_msg = ClientToServer::ChatMessage { content: line };
-                if let Ok(json) = serde_json::to_string(&chat_msg) {
-                    if framed.send(json).await.is_err() {
-                        logger!(Error, "Lost connection to server.");
-                        break;
-                    }
-                }
-
-                print!("{} ", ">".bright_black().bold());
-                io::stdout().flush().unwrap();
-            }
-
-            Some(Ok(line)) = framed.next() => {
-                if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
-                    print!("\r\x1B[2K");
-                    io::stdout().flush().unwrap();
-
-                    match msg {
-                        ServerToClient::Broadcast { sender, content, timestamp } => {
-                            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
-                            let display_name = format_username(&sender);
-
-                            logger!(Info, "{} {}: {}",
-                                local_time.to_string().dimmed(),
-                                display_name.blue().bold(),
-                                content
-                            );
+                        let chat_msg = ClientToServer::ChatMessage { content: line };
+                        if let Ok(json) = serde_json::to_string(&chat_msg) {
+                            if framed.send(json).await.is_err() {
+                                logger!(Error, "Lost connection to server.");
+                                break;
+                            }
                         }
-                        ServerToClient::SystemAlert { content, .. } => {
-                            logger!(Info, "{}", content.yellow());
-                        }
-                        _ => {}
+
+                        print!("{} ", ">".bright_black().bold());
+                        io::stdout().flush().unwrap();
                     }
 
-                    print!("{} ", ">".bright_black().bold());
-                    io::stdout().flush().unwrap();
-                }
-            }
+        result = framed.next() => {
+                        match result {
+                            Some(Ok(line)) => {
+                                if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
+                                    print!("\r\x1B[2K");
+                                    io::stdout().flush().unwrap();
 
-            _ = signal::ctrl_c() => {
-                print!("\r\x1B[2K");
-                logger!(Info, "Disconnecting from chat...");
-                std::process::exit(0);
-            }
-        }
+                                    match msg {
+                                        ServerToClient::Broadcast { sender, content, timestamp } => {
+                                            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
+                                            let display_name = format_username(&sender);
+
+                                            logger!(Info, "{} {}: {}",
+                                                local_time.to_string().dimmed(),
+                                                display_name.blue().bold(),
+                                                content
+                                            );
+                                        }
+                                        ServerToClient::SystemAlert { content, .. } => {
+                                            logger!(Info, "{}", content.yellow());
+                                        }
+                                        _ => {}
+                                    }
+
+                                    print!("{} ", ">".bright_black().bold());
+                                    io::stdout().flush().unwrap();
+                                }
+                            }
+                            _ => {
+                                print!("\r\x1B[2K");
+                                logger!(Error, "Connection closed by server.");
+                                std::process::exit(0);
+                            }
+                        }
+                    }
+
+                    _ = signal::ctrl_c() => {
+                        print!("\r\x1B[2K");
+                        logger!(Info, "Disconnecting from chat...");
+                        std::process::exit(0);
+                    }
+                }
     }
 
     Ok(())
