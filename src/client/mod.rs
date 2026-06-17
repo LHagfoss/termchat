@@ -12,7 +12,7 @@ use crossterm::{
 
 use crate::protocol::{ClientToServer, ServerToClient};
 
-const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/exit", "/theme"];
+const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme"];
 const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset", "lagos", "mint", "lavender"];
 
 #[derive(Clone, Copy, Debug)]
@@ -382,12 +382,23 @@ fn print_help(colors: ThemeColors) {
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/users", "List all online users");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/clear", "Clear screen");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/refresh", "Clear screen & show welcome banner");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/info", "Show connection info");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/exit", "Exit the chat client");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/theme <name>", "Change color theme");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+C", "Exit the chat client");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+L", "Clear screen");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Up/Down", "Navigate message history");
     print!("{}\r\n", "  ───────────────────────────────────".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+}
+
+fn print_info(ip: &str, port: u16, name: &str, server_name: &str, token: &str, theme: &str, colors: ThemeColors) {
+    print!("{}\r\n", "  ── Connection Info ──".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    print!("   {:<10} {}\r\n", "User:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), name);
+    print!("   {:<10} {}\r\n", "Server:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), server_name);
+    print!("   {:<10} {}:{}\r\n", "Address:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), ip, port);
+    print!("   {:<10} {}\r\n", "Token:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), token);
+    print!("   {:<10} {}\r\n", "Theme:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), theme);
+    print!("{}\r\n", "  ─────────────────────".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
 }
 
 fn is_showing_suggestions(state: &InputState) -> bool {
@@ -441,12 +452,29 @@ fn print_suggestions(state: &InputState, colors: ThemeColors) {
 fn get_lines_above_input(state: &InputState) -> u16 {
     let mut lines = 1;
     if state.show_help {
-        lines += 11;
+        lines += 12; // help prints 12 lines now
     }
     if is_showing_suggestions(state) {
         lines += 1;
     }
     lines
+}
+
+fn format_typing_indicator(typing_users: &std::collections::HashSet<String>) -> Option<String> {
+    if typing_users.is_empty() {
+        None
+    } else {
+        let mut list: Vec<String> = typing_users.iter().cloned().collect();
+        list.sort();
+        let display = if list.len() == 1 {
+            format!("{} is typing...", list[0])
+        } else if list.len() == 2 {
+            format!("{} and {} are typing...", list[0], list[1])
+        } else {
+            "Several people are typing...".to_string()
+        };
+        Some(display)
+    }
 }
 
 fn clear_screen() {
@@ -458,13 +486,78 @@ fn clear_screen() {
     );
 }
 
-fn print_message(message: &ServerToClient, colors: ThemeColors) {
+fn highlight_mentions(content: &str, own_username: &str, colors: ThemeColors) -> (String, bool) {
+    let mut words = Vec::new();
+    let mut has_self_mention = false;
+    let own_lower = own_username.to_lowercase();
+
+    for token in content.split(' ') {
+        if let Some(at_idx) = token.find('@') {
+            // Check if the '@' is a valid mention prefix:
+            // 1. There is at least one character after '@'.
+            // 2. The character after '@' is alphanumeric.
+            // 3. Characters before '@' are only leading punctuation (not alphanumeric).
+            let chars: Vec<char> = token.chars().collect();
+            if at_idx + 1 < chars.len() && chars[at_idx + 1].is_alphanumeric() {
+                let leading_ok = chars[..at_idx].iter().all(|&c| !c.is_alphanumeric() && c != '@');
+                if leading_ok {
+                    let leading_part: String = chars[..at_idx].iter().collect();
+                    let mut username_chars = Vec::new();
+                    let mut punctuation_chars = Vec::new();
+                    let mut in_punctuation = false;
+
+                    for &c in &chars[at_idx + 1..] {
+                        if in_punctuation {
+                            punctuation_chars.push(c);
+                        } else if c.is_alphanumeric() || c == '_' || c == '-' {
+                            username_chars.push(c);
+                        } else {
+                            in_punctuation = true;
+                            punctuation_chars.push(c);
+                        }
+                    }
+
+                    let username_part: String = username_chars.into_iter().collect();
+                    let punctuation_part: String = punctuation_chars.into_iter().collect();
+
+                    if username_part.to_lowercase() == own_lower {
+                        has_self_mention = true;
+                        let formatted_mention = format!("@{}", username_part)
+                            .truecolor(0, 0, 0)
+                            .on_truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                            .bold()
+                            .to_string();
+                        words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
+                        continue;
+                    } else {
+                        let formatted_mention = format!("@{}", username_part)
+                            .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                            .bold()
+                            .to_string();
+                        words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
+                        continue;
+                    }
+                }
+            }
+        }
+        words.push(token.to_string());
+    }
+
+    (words.join(" "), has_self_mention)
+}
+
+fn print_message(message: &ServerToClient, own_username: &str, colors: ThemeColors) {
     match message {
         ServerToClient::Broadcast { sender, content, timestamp } => {
             let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
             let display_name = format_username(sender);
             let colored_name = get_colored_name(&display_name);
-            print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, content);
+            let (highlighted_content, has_self_mention) = highlight_mentions(content, own_username, colors);
+            print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, highlighted_content);
+            if has_self_mention {
+                print!("\x07"); // trigger terminal beep
+                let _ = io::stdout().flush();
+            }
         }
         ServerToClient::SystemAlert { content, .. } => {
             print!(" {} {}\r\n", "✦".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(), content.dimmed());
@@ -481,6 +574,7 @@ fn draw_prompt(
     server_name: &str,
     username: &str,
     prev_lines_above: Option<u16>,
+    typing_users: &std::collections::HashSet<String>,
 ) -> Result<(), io::Error> {
     let colors = ThemeColors::get(&state.theme_name);
     let mut stdout = io::stdout();
@@ -519,10 +613,14 @@ fn draw_prompt(
     print!("{}\r\n", sep_color);
 
     // Draw status bar
-    let left_text = " ? for shortcuts ".truecolor(colors.status.0, colors.status.1, colors.status.2);
+    let mut left_text_raw = " ? for shortcuts ".to_string();
+    if let Some(indicator) = format_typing_indicator(typing_users) {
+        left_text_raw.push_str(&format!("• {} ", indicator));
+    }
+    let left_text = left_text_raw.truecolor(colors.status.0, colors.status.1, colors.status.2);
     let right_text = format!(" {} • {} ", username, server_name).truecolor(colors.status.0, colors.status.1, colors.status.2);
     
-    let left_len = 17;
+    let left_len = left_text_raw.chars().count();
     let right_len = username.chars().count() + server_name.chars().count() + 6;
     let spaces_count = width.saturating_sub(left_len + right_len + 1);
     let spaces = " ".repeat(spaces_count);
@@ -544,6 +642,7 @@ fn handle_incoming_message(
     input_state: &InputState,
     server_name: &str,
     username: &str,
+    typing_users: &std::collections::HashSet<String>,
 ) {
     let colors = ThemeColors::get(&input_state.theme_name);
     let mut stdout = io::stdout();
@@ -554,9 +653,9 @@ fn handle_incoming_message(
     }
     let _ = execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown));
 
-    print_message(&msg, colors);
+    print_message(&msg, username, colors);
 
-    let _ = draw_prompt(input_state, server_name, username, None);
+    let _ = draw_prompt(input_state, server_name, username, None, typing_users);
 }
 
 pub async fn run(
@@ -574,7 +673,7 @@ pub async fn run(
 
     let handshake = ClientToServer::Handshake {
         name: name.clone(),
-        token,
+        token: token.clone(),
     };
     let handshake_json = serde_json::to_string(&handshake)?;
     framed.send(handshake_json).await?;
@@ -610,6 +709,8 @@ pub async fn run(
     print_welcome_banner(&server_name, &name, colors);
 
     let mut input_state = InputState::new(theme_name);
+    let mut typing_users = std::collections::HashSet::<String>::new();
+    let mut client_is_typing = false;
 
     let (key_tx, mut key_rx) = tokio::sync::mpsc::channel::<Event>(100);
     std::thread::spawn(move || {
@@ -626,7 +727,7 @@ pub async fn run(
     });
 
     let _raw_guard = RawModeGuard::new();
-    draw_prompt(&input_state, &server_name, &name, None)?;
+    draw_prompt(&input_state, &server_name, &name, None, &typing_users)?;
 
     loop {
         tokio::select! {
@@ -636,47 +737,57 @@ pub async fn run(
                         if key_event.kind == event::KeyEventKind::Release {
                             continue;
                         }
+                        
                         let prev_lines_above = get_lines_above_input(&input_state);
 
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
                             input_state.show_help = true;
-                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                             continue;
                         }
 
                         if let Some(cmd) = input_state.handle_key(key_event) {
+                            // Reset typing status on submit
+                            if client_is_typing {
+                                client_is_typing = false;
+                                let stop_typing = ClientToServer::Typing { is_typing: false };
+                                if let Ok(json) = serde_json::to_string(&stop_typing) {
+                                    let _ = framed.send(json).await;
+                                }
+                            }
+
                             if cmd == "/exit" {
                                 let _ = terminal::disable_raw_mode();
                                 println!("\r\nDisconnecting from chat...");
                                 break;
                             } else if cmd == "/clear" {
                                 clear_screen();
-                                let _ = draw_prompt(&input_state, &server_name, &name, None);
+                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
                             } else if cmd == "/refresh" {
                                 clear_screen();
                                 let current_colors = ThemeColors::get(&input_state.theme_name);
                                 print_welcome_banner(&server_name, &name, current_colors);
-                                let _ = draw_prompt(&input_state, &server_name, &name, None);
-                            } else if cmd == "/help" {
-                                input_state.show_help = true;
-                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                            } else if cmd == "/info" {
+                                let info_colors = ThemeColors::get(&input_state.theme_name);
+                                print_info(&ip, port, &name, &server_name, &token, &input_state.theme_name, info_colors);
+                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
                             } else if cmd.starts_with("/theme ") {
                                 let target_theme = cmd[7..].trim().to_lowercase();
                                 if THEME_NAMES.contains(&target_theme.as_str()) {
                                     input_state.theme_name = target_theme.clone();
                                     let _ = crate::config::update_theme(target_theme.clone());
                                     
-                                    // Trigger inline theme success alert
                                     let info_msg = ServerToClient::SystemAlert {
                                         content: format!("Theme changed to '{}' successfully!", target_theme),
                                         timestamp: chrono::Utc::now(),
                                     };
-                                    handle_incoming_message(info_msg, &input_state, &server_name, &name);
+                                    handle_incoming_message(info_msg, &input_state, &server_name, &name, &typing_users);
                                 } else {
                                     let error_msg = ServerToClient::Error {
                                         message: format!("Unknown theme '{}'. Options: blurple, matrix, cyberpunk, sunset", target_theme),
                                     };
-                                    handle_incoming_message(error_msg, &input_state, &server_name, &name);
+                                    handle_incoming_message(error_msg, &input_state, &server_name, &name, &typing_users);
                                 }
                             } else {
                                 let chat_msg = ClientToServer::ChatMessage { content: cmd };
@@ -687,14 +798,30 @@ pub async fn run(
                                         break;
                                     }
                                 }
-                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                             }
                         } else {
-                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                            // Check typing state changes
+                            let currently_empty = input_state.buffer.is_empty();
+                            if !currently_empty && !client_is_typing {
+                                client_is_typing = true;
+                                let start_typing = ClientToServer::Typing { is_typing: true };
+                                if let Ok(json) = serde_json::to_string(&start_typing) {
+                                    let _ = framed.send(json).await;
+                                }
+                            } else if currently_empty && client_is_typing {
+                                client_is_typing = false;
+                                let stop_typing = ClientToServer::Typing { is_typing: false };
+                                if let Ok(json) = serde_json::to_string(&stop_typing) {
+                                    let _ = framed.send(json).await;
+                                }
+                            }
+
+                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                         }
                     }
                     Event::Resize(_, _) => {
-                        let _ = draw_prompt(&input_state, &server_name, &name, None);
+                        let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
                     }
                     _ => {}
                 }
@@ -704,7 +831,21 @@ pub async fn run(
                 match result {
                     Some(Ok(line)) => {
                         if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
-                            handle_incoming_message(msg, &input_state, &server_name, &name);
+                            match msg {
+                                ServerToClient::UserTyping { sender, is_typing } => {
+                                    if sender != name {
+                                        if is_typing {
+                                            typing_users.insert(sender);
+                                        } else {
+                                            typing_users.remove(&sender);
+                                        }
+                                        let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                                    }
+                                }
+                                _ => {
+                                    handle_incoming_message(msg, &input_state, &server_name, &name, &typing_users);
+                                }
+                            }
                         }
                     }
                     _ => {

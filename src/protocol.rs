@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum ClientToServer {
     Handshake { name: String, token: String },
     ChatMessage { content: String },
+    Typing { is_typing: bool },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -20,6 +21,10 @@ pub enum ServerToClient {
     SystemAlert {
         content: String,
         timestamp: DateTime<Utc>,
+    },
+    UserTyping {
+        sender: String,
+        is_typing: bool,
     },
     Error {
         message: String,

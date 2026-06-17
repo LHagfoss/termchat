@@ -193,28 +193,40 @@ async fn handle_client(
                     break;
                 };
 
-                if let Ok(ClientToServer::ChatMessage { content }) = serde_json::from_str(&line) {
-                    if content.trim() == "/users" {
-                        let active_users = state.users.lock().await;
-                        let user_list = active_users.iter().cloned().collect::<Vec<_>>().join(", ");
+                if let Ok(client_msg) = serde_json::from_str::<ClientToServer>(&line) {
+                    match client_msg {
+                        ClientToServer::ChatMessage { content } => {
+                            if content.trim() == "/users" {
+                                let active_users = state.users.lock().await;
+                                let user_list = active_users.iter().cloned().collect::<Vec<_>>().join(", ");
 
-                        let alert = ServerToClient::SystemAlert {
-                            content: format!("Online users: {}", user_list),
-                            timestamp: chrono::Utc::now(),
-                        };
+                                let alert = ServerToClient::SystemAlert {
+                                    content: format!("Online users: {}", user_list),
+                                    timestamp: chrono::Utc::now(),
+                                };
 
-                        if let Ok(json) = serde_json::to_string(&alert) {
-                            let _ = framed.send(json).await;
+                                if let Ok(json) = serde_json::to_string(&alert) {
+                                    let _ = framed.send(json).await;
+                                }
+                                continue;
+                            }
+
+                            let broadcast_msg = ServerToClient::Broadcast {
+                                sender: username.clone(),
+                                content,
+                                timestamp: chrono::Utc::now(),
+                            };
+                            let _ = state.tx.send(broadcast_msg);
                         }
-                        continue;
+                        ClientToServer::Typing { is_typing } => {
+                            let broadcast_msg = ServerToClient::UserTyping {
+                                sender: username.clone(),
+                                is_typing,
+                            };
+                            let _ = state.tx.send(broadcast_msg);
+                        }
+                        _ => {}
                     }
-
-                    let broadcast_msg = ServerToClient::Broadcast {
-                        sender: username.clone(),
-                        content,
-                        timestamp: chrono::Utc::now(),
-                    };
-                    let _ = state.tx.send(broadcast_msg);
                 }
             }
 
