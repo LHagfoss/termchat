@@ -142,7 +142,6 @@ struct InputState {
     pre_tab_cursor: usize,
     tab_word_start: Option<usize>,
     theme_name: String,
-    last_drawn_lines: u16,
     online_users: Vec<String>,
 }
 
@@ -161,7 +160,6 @@ impl InputState {
             pre_tab_cursor: 0,
             tab_word_start: None,
             theme_name,
-            last_drawn_lines: 0,
             online_users: Vec::new(),
         }
     }
@@ -666,31 +664,8 @@ fn draw_prompt(
         }
     }
 
-    // Calculate how many lines we will draw now
-    let current_lines_above = get_lines_above_input(state);
-    let current_total_lines = current_lines_above + 3;
-
-    // We need to clear the maximum of what we drew last time and what we draw now
-    let lines_to_clear = state.last_drawn_lines.max(current_total_lines);
-
-    // 2. Clear all the lines we might have drawn previously
-    for i in 0..lines_to_clear {
-        execute!(stdout, terminal::Clear(terminal::ClearType::CurrentLine))?;
-        if i + 1 < lines_to_clear {
-            execute!(stdout, cursor::MoveDown(1))?;
-        }
-    }
-
-    // 3. Move back up to the top of where we want to draw the NEW prompt block
-    if lines_to_clear > 1 {
-        execute!(stdout, cursor::MoveUp(lines_to_clear - 1))?;
-    }
-
-    // If the new block is smaller than the cleared area, offset start downwards
-    let start_offset = lines_to_clear.saturating_sub(current_total_lines);
-    if start_offset > 0 {
-        execute!(stdout, cursor::MoveDown(start_offset))?;
-    }
+    // 2. Clear from cursor down (completely wipes the old prompt block)
+    execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
 
     // Draw help if active
     if state.show_help {
@@ -705,17 +680,20 @@ fn draw_prompt(
     // Draw separator 1
     let sep_char = "─".repeat(width);
     let sep_color = sep_char.truecolor(colors.line.0, colors.line.1, colors.line.2);
-    print!("{}\r\n", sep_color);
+    print!("{}", sep_color);
+    execute!(stdout, cursor::MoveToNextLine(1))?;
 
     // Get visible input based on terminal width
     let (visible_buffer, visible_cursor) = get_visible_prompt_and_cursor(&state.buffer, state.cursor_index, width);
 
     // Draw input line
     let prompt_sym = "> ".truecolor(colors.prompt.0, colors.prompt.1, colors.prompt.2).bold();
-    print!("{}{}\r\n", prompt_sym, visible_buffer);
+    print!("{}{}", prompt_sym, visible_buffer);
+    execute!(stdout, cursor::MoveToNextLine(1))?;
 
     // Draw separator 2
-    print!("{}\r\n", sep_color);
+    print!("{}", sep_color);
+    execute!(stdout, cursor::MoveToNextLine(1))?;
 
     // Draw status bar
     let mut left_text_raw = " ? for shortcuts ".to_string();
@@ -732,6 +710,7 @@ fn draw_prompt(
 
     print!("{}{}{}", left_text, spaces, right_text);
 
+    // Position cursor back to the input line
     execute!(
         stdout,
         cursor::MoveUp(2),
@@ -739,7 +718,6 @@ fn draw_prompt(
     )?;
     stdout.flush()?;
 
-    state.last_drawn_lines = current_total_lines;
     Ok(())
 }
 
@@ -759,20 +737,10 @@ fn handle_incoming_message(
     if prev_lines_above > 0 {
         let _ = execute!(stdout, cursor::MoveUp(prev_lines_above));
     }
-    let total_lines = input_state.last_drawn_lines.max(prev_lines_above + 3);
-    for i in 0..total_lines {
-        let _ = execute!(stdout, terminal::Clear(terminal::ClearType::CurrentLine));
-        if i + 1 < total_lines {
-            let _ = execute!(stdout, cursor::MoveDown(1));
-        }
-    }
-    if total_lines > 1 {
-        let _ = execute!(stdout, cursor::MoveUp(total_lines - 1));
-    }
+    let _ = execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown));
 
     print_message(&msg, username, &input_state.online_users, colors);
 
-    input_state.last_drawn_lines = 0;
     let _ = draw_prompt(input_state, server_name, username, None, typing_users);
 }
 
