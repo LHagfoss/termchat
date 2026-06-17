@@ -455,15 +455,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lagos_logger"
-version = "0.2.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3501717df88f46802b25a3b30051b9294b7839812f17cb4ff329da6f9ef8d31"
-dependencies = [
- "colored",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -786,7 +777,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "termchat"
+name = "tc"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -795,7 +786,6 @@ dependencies = [
  "crossterm",
  "directories",
  "futures",
- "lagos_logger",
  "serde",
  "serde_json",
  "tokio",

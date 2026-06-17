@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(n) => n,
                 None => {
                     print!(
-                        "       {} Enter server name: ",
+                        "   {} Enter server name: ",
                         "Input".bright_white().bold()
                     );
                     io::stdout().flush().unwrap();
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         cli::Commands::Join { ip, port, name } => {
             print!(
-                "       {} Enter server token: ",
+                "   {} Enter server token: ",
                 "Input".bright_white().bold()
             );
             io::stdout().flush().unwrap();

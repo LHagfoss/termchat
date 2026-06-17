@@ -12,8 +12,8 @@ use crossterm::{
 
 use crate::protocol::{ClientToServer, ServerToClient};
 
-const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/exit", "/theme"];
-const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset"];
+const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/exit", "/theme"];
+const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset", "lagos", "mint", "lavender"];
 
 #[derive(Clone, Copy, Debug)]
 struct ThemeColors {
@@ -27,6 +27,27 @@ struct ThemeColors {
 impl ThemeColors {
     pub fn get(theme_name: &str) -> Self {
         match theme_name.to_lowercase().as_str() {
+            "lagos" => Self {
+                title: (236, 110, 93),   // Cozy Coral
+                line: (60, 88, 101),     // Slate Blue
+                prompt: (236, 110, 93),  // Coral
+                accent: (236, 110, 93),  // Coral
+                status: (139, 155, 158), // Muted Grey-Blue
+            },
+            "mint" => Self {
+                title: (140, 216, 167),  // Soft Mint
+                line: (78, 135, 140),    // Muted Teal
+                prompt: (140, 216, 167), // Soft Mint
+                accent: (140, 216, 167), // Soft Mint
+                status: (181, 184, 177), // Soft Gray
+            },
+            "lavender" => Self {
+                title: (193, 158, 214),  // Soft Lavender
+                line: (133, 112, 157),   // Dusty Purple
+                prompt: (193, 158, 214), // Soft Lavender
+                accent: (193, 158, 214), // Soft Lavender
+                status: (210, 180, 188), // Muted Rose
+            },
             "matrix" => Self {
                 title: (0, 255, 100),
                 line: (0, 120, 50),
@@ -51,10 +72,10 @@ impl ThemeColors {
             // "blurple" (default)
             _ => Self {
                 title: (114, 137, 218),  // Blurple!
-                line: (40, 160, 90),     // Emerald Green
+                line: (92, 163, 128),    // Muted Mint
                 prompt: (114, 137, 218), // Blurple
-                accent: (50, 220, 100),  // Green
-                status: (100, 120, 125), // Slate Grey
+                accent: (114, 137, 218), // Blurple
+                status: (146, 154, 171), // Slate Gray
             },
         }
     }
@@ -356,6 +377,7 @@ fn print_help(colors: ThemeColors) {
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/help", "Show this help menu");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/users", "List all online users");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/clear", "Clear screen");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/refresh", "Clear screen & show welcome banner");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/exit", "Exit the chat client");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/theme <name>", "Change color theme");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+C", "Exit the chat client");
@@ -415,7 +437,7 @@ fn print_suggestions(state: &InputState, colors: ThemeColors) {
 fn get_lines_above_input(state: &InputState) -> u16 {
     let mut lines = 1;
     if state.show_help {
-        lines += 9;
+        lines += 11;
     }
     if is_showing_suggestions(state) {
         lines += 1;
@@ -621,6 +643,9 @@ pub async fn run(
                                 println!("\r\nDisconnecting from chat...");
                                 break;
                             } else if cmd == "/clear" {
+                                clear_screen();
+                                let _ = draw_prompt(&input_state, &server_name, &name, None);
+                            } else if cmd == "/refresh" {
                                 clear_screen();
                                 let current_colors = ThemeColors::get(&input_state.theme_name);
                                 print_welcome_banner(&server_name, &name, current_colors);

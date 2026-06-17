@@ -11,7 +11,7 @@ pub struct Config {
 }
 
 fn default_theme() -> String {
-    "blurple".to_string()
+    "lagos".to_string()
 }
 
 pub fn load_or_create_config() -> Config {
@@ -30,8 +30,8 @@ pub fn load_or_create_config() -> Config {
         });
     }
 
-    println!("Welcome to tc! It looks like you don't have a profile yet.");
-    print!("What is your username? ");
+    println!("   Welcome to tc! It looks like you don't have a profile yet.");
+    print!("   What is your username? ");
     io::stdout().flush().unwrap();
 
     let mut name = String::new();

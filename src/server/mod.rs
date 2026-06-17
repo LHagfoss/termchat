@@ -10,8 +10,19 @@ use tokio::sync::broadcast;
 use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::protocol::{ClientToServer, ServerToClient};
-use lagos_logger::{Level::*, logger};
 use state::ServerState;
+
+macro_rules! server_log {
+    ($level:ident, $($arg:tt)*) => {
+        let prefix = match stringify!($level) {
+            "Info" => "Info".green().bold(),
+            "Warn" => "Warn".yellow().bold(),
+            "Error" => "Error".red().bold(),
+            other => other.white().bold(),
+        };
+        println!("   {} {}", prefix, format!($($arg)*));
+    };
+}
 
 fn copy_to_clipboard(text: &str) -> bool {
     use std::process::{Command, Stdio};
@@ -33,12 +44,12 @@ fn copy_to_clipboard(text: &str) -> bool {
 
 pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     println!();
-    println!("{}", r"████████╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ ".truecolor(114, 137, 218).bold());
-    println!("{}", r"╚══██╔══╝██╔════╝    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗".truecolor(114, 137, 218).bold());
-    println!("{}", r"   ██║   ██║         ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝".truecolor(114, 137, 218).bold());
-    println!("{}", r"   ██║   ██║         ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗".truecolor(114, 137, 218).bold());
-    println!("{}", r"   ██║   ╚██████╗    ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║".truecolor(114, 137, 218).bold());
-    println!("{}", r"   ╚═╝    ╚═════╝    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝".truecolor(114, 137, 218).bold());
+    println!("   {}", r"████████╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ ".truecolor(236, 110, 93).bold());
+    println!("   {}", r"╚══██╔══╝██╔════╝    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗".truecolor(236, 110, 93).bold());
+    println!("   {}", r"   ██║   ██║         ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝".truecolor(236, 110, 93).bold());
+    println!("   {}", r"   ██║   ██║         ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗".truecolor(236, 110, 93).bold());
+    println!("   {}", r"   ██║   ╚██████╗    ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║".truecolor(236, 110, 93).bold());
+    println!("   {}", r"   ╚═╝    ╚═════╝    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝".truecolor(236, 110, 93).bold());
     println!();
 
     let addr = format!("{}:{}", ip, port);
@@ -46,11 +57,11 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
 
     let token = generate_token();
 
-    logger!(Info, "Server '{}' initialized", name);
-    logger!(Info, "Listening on {}", addr);
+    server_log!(Info, "Server '{}' initialized", name);
+    server_log!(Info, "Listening on {}", addr);
     
     let copied_auto = copy_to_clipboard(&token);
-    logger!(Info, "Secure token: {}{}", token, if copied_auto { " (copied to clipboard)" } else { "" });
+    server_log!(Info, "Secure token: {}{}", token, if copied_auto { " (copied to clipboard)" } else { "" });
 
     let (tx, _) = broadcast::channel::<ServerToClient>(100);
     let state = Arc::new(ServerState {
@@ -84,29 +95,29 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
                     accept_result = listener.accept() => {
                         match accept_result {
                             Ok((stream, peer_addr)) => {
-                                logger!(Info, "Connection attempt received from {}", peer_addr);
+                                server_log!(Info, "Connection attempt received from {}", peer_addr);
 
                                 let state_clone = Arc::clone(&state);
                                 tokio::spawn(async move {
                                     if let Err(e) = handle_client(stream, state_clone).await {
-                                        logger!(Warn, "Connection with {} dropped: {}", peer_addr, e);
+                                        server_log!(Warn, "Connection with {} dropped: {}", peer_addr, e);
                                     }
                                 });
                             }
                             Err(e) => {
-                                logger!(Error, "Failed to accept connection: {}", e);
+                                server_log!(Error, "Failed to accept connection: {}", e);
                             }
                         }
                     }
                     Some(token_to_copy) = input_rx.recv() => {
                         if copy_to_clipboard(&token_to_copy) {
-                            logger!(Info, "Secure token copied to clipboard successfully!");
+                            server_log!(Info, "Secure token copied to clipboard successfully!");
                         } else {
-                            logger!(Warn, "Failed to copy token to clipboard.");
+                            server_log!(Warn, "Failed to copy token to clipboard.");
                         }
                     }
                     _ = signal::ctrl_c() => {
-                        logger!(Info, "Stopping server...");
+                        server_log!(Info, "Stopping server...");
 
                         let shutdown_alert = ServerToClient::SystemAlert {
                             content: "Server is shutting down...".to_string(),
@@ -119,7 +130,7 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
                 }
     }
 
-    logger!(Info, "Success! Stopped server successfully.");
+    server_log!(Info, "Success! Stopped server successfully.");
     Ok(())
 }
 
@@ -157,7 +168,7 @@ async fn handle_client(
         }
     };
 
-    logger!(Info, "'{}' successfully authenticated", username);
+    server_log!(Info, "'{}' successfully authenticated", username);
 
     state.users.lock().await.insert(username.clone());
 
@@ -224,7 +235,7 @@ async fn handle_client(
 
     state.users.lock().await.remove(&username);
 
-    logger!(Info, "'{}' disconnected", username);
+    server_log!(Info, "'{}' disconnected", username);
 
     let leave_alert = ServerToClient::SystemAlert {
         content: format!("{} has left the chat", username),
