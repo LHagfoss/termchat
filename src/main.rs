@@ -6,7 +6,6 @@ mod server;
 
 use clap::Parser;
 use colored::Colorize;
-use lagos_logger::{Level::*, logger};
 use std::io::{self, Write};
 
 #[tokio::main]
@@ -52,22 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let final_username = name.unwrap_or(user_config.name);
 
-            logger!(
-                Info,
-                "Joining {}:{} as '{}' with token '{}'",
-                ip,
-                port,
-                final_username,
-                token
-            );
-
-            client::run(ip, port, final_username, token).await?;
+            client::run(ip, port, final_username, token, user_config.theme).await?;
         }
         cli::Commands::Profile { name } => {
             let updated = config::update_name(name.clone());
-            logger!(
-                Info,
-                "Profile updated! Your username is now '{}'",
+            println!(
+                "{} Profile updated! Your username is now '{}'",
+                "✓".green().bold(),
                 updated.name
             );
         }

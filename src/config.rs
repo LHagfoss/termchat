@@ -6,6 +6,12 @@ use std::io::{self, Write};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub name: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "blurple".to_string()
 }
 
 pub fn load_or_create_config() -> Config {
@@ -17,7 +23,11 @@ pub fn load_or_create_config() -> Config {
     if config_file.exists() {
         let contents = fs::read_to_string(&config_file).expect("Failed to read config.toml");
 
-        return toml::from_str(&contents).expect("Failed to parse config.toml");
+        // Parse and ensure theme has default value if missing
+        return toml::from_str(&contents).unwrap_or_else(|_| Config {
+            name: "default-user".to_string(),
+            theme: default_theme(),
+        });
     }
 
     println!("Welcome to tc! It looks like you don't have a profile yet.");
@@ -35,7 +45,10 @@ pub fn load_or_create_config() -> Config {
         std::process::exit(1);
     }
 
-    let new_config = Config { name };
+    let new_config = Config {
+        name,
+        theme: default_theme(),
+    };
 
     fs::create_dir_all(config_dir).expect("Failed to create config directory");
     let toml_string = toml::to_string(&new_config).unwrap();
@@ -51,11 +64,27 @@ pub fn update_name(new_name: String) -> Config {
     let config_dir = proj_dirs.config_dir();
     let config_file = config_dir.join("config.toml");
 
-    let new_config = Config { name: new_name };
+    let mut config = load_or_create_config();
+    config.name = new_name;
 
     fs::create_dir_all(config_dir).expect("Failed to create config directory");
-    let toml_string = toml::to_string(&new_config).unwrap();
+    let toml_string = toml::to_string(&config).unwrap();
     fs::write(&config_file, toml_string).expect("Failed to write config.toml");
 
-    new_config
+    config
+}
+
+pub fn update_theme(new_theme: String) -> Config {
+    let proj_dirs = ProjectDirs::from("", "", "tc").expect("Could not find the home directory");
+    let config_dir = proj_dirs.config_dir();
+    let config_file = config_dir.join("config.toml");
+
+    let mut config = load_or_create_config();
+    config.theme = new_theme;
+
+    fs::create_dir_all(config_dir).expect("Failed to create config directory");
+    let toml_string = toml::to_string(&config).unwrap();
+    fs::write(&config_file, toml_string).expect("Failed to write config.toml");
+
+    config
 }

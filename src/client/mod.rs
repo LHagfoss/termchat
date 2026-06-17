@@ -1,12 +1,64 @@
 use colored::Colorize;
 use futures::{SinkExt, StreamExt};
-use lagos_logger::{Level::*, logger};
 use std::io::{self, Write};
 use tokio::net::TcpStream;
-use tokio::signal;
-use tokio_util::codec::{Framed, FramedRead, LinesCodec};
+use tokio_util::codec::{Framed, LinesCodec};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal,
+};
 
 use crate::protocol::{ClientToServer, ServerToClient};
+
+const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/exit", "/theme"];
+const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset"];
+
+#[derive(Clone, Copy, Debug)]
+struct ThemeColors {
+    pub title: (u8, u8, u8),
+    pub line: (u8, u8, u8),
+    pub prompt: (u8, u8, u8),
+    pub accent: (u8, u8, u8),
+    pub status: (u8, u8, u8),
+}
+
+impl ThemeColors {
+    pub fn get(theme_name: &str) -> Self {
+        match theme_name.to_lowercase().as_str() {
+            "matrix" => Self {
+                title: (0, 255, 100),
+                line: (0, 120, 50),
+                prompt: (0, 255, 100),
+                accent: (100, 255, 150),
+                status: (0, 180, 80),
+            },
+            "cyberpunk" => Self {
+                title: (255, 0, 127),
+                line: (0, 240, 255),
+                prompt: (255, 0, 127),
+                accent: (255, 200, 0),
+                status: (0, 200, 220),
+            },
+            "sunset" => Self {
+                title: (255, 90, 90),
+                line: (180, 80, 250),
+                prompt: (255, 180, 0),
+                accent: (180, 80, 250),
+                status: (255, 120, 180),
+            },
+            // "blurple" (default)
+            _ => Self {
+                title: (114, 137, 218),  // Blurple!
+                line: (40, 160, 90),     // Emerald Green
+                prompt: (114, 137, 218), // Blurple
+                accent: (50, 220, 100),  // Green
+                status: (100, 120, 125), // Slate Grey
+            },
+        }
+    }
+}
 
 fn format_username(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
@@ -18,119 +70,619 @@ fn format_username(name: &str) -> String {
     }
 }
 
+fn get_colored_name(name: &str) -> colored::ColoredString {
+    let mut hash = 0u32;
+    for c in name.chars() {
+        hash = hash.wrapping_add(c as u32).wrapping_mul(31);
+    }
+    let colors = [
+        colored::Color::Red,
+        colored::Color::Green,
+        colored::Color::Yellow,
+        colored::Color::Blue,
+        colored::Color::Magenta,
+        colored::Color::Cyan,
+        colored::Color::BrightRed,
+        colored::Color::BrightGreen,
+        colored::Color::BrightYellow,
+        colored::Color::BrightBlue,
+        colored::Color::BrightMagenta,
+        colored::Color::BrightCyan,
+    ];
+    let color = colors[(hash as usize) % colors.len()];
+    name.color(color).bold()
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> Self {
+        let _ = terminal::enable_raw_mode();
+        RawModeGuard
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+struct InputState {
+    buffer: Vec<char>,
+    cursor_index: usize,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    temp_buffer: Vec<char>,
+    show_help: bool,
+    tab_matches: Vec<String>,
+    tab_index: Option<usize>,
+    pre_tab_buffer: Vec<char>,
+    theme_name: String,
+}
+
+impl InputState {
+    fn new(theme_name: String) -> Self {
+        Self {
+            buffer: Vec::new(),
+            cursor_index: 0,
+            history: Vec::new(),
+            history_index: None,
+            temp_buffer: Vec::new(),
+            show_help: false,
+            tab_matches: Vec::new(),
+            tab_index: None,
+            pre_tab_buffer: Vec::new(),
+            theme_name,
+        }
+    }
+
+    fn handle_key(&mut self, key_event: event::KeyEvent) -> Option<String> {
+        if key_event.code != KeyCode::Tab {
+            self.tab_index = None;
+            self.tab_matches.clear();
+            self.pre_tab_buffer.clear();
+        }
+
+        match key_event.code {
+            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some("/exit".to_string())
+            }
+            KeyCode::Char('l') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some("/clear".to_string())
+            }
+            KeyCode::Char(c) => {
+                self.show_help = false;
+                if !key_event.modifiers.contains(KeyModifiers::CONTROL) && !key_event.modifiers.contains(KeyModifiers::META) {
+                    self.buffer.insert(self.cursor_index, c);
+                    self.cursor_index += 1;
+                }
+                None
+            }
+            KeyCode::Backspace => {
+                self.show_help = false;
+                if self.cursor_index > 0 {
+                    self.buffer.remove(self.cursor_index - 1);
+                    self.cursor_index -= 1;
+                }
+                None
+            }
+            KeyCode::Delete => {
+                self.show_help = false;
+                if self.cursor_index < self.buffer.len() {
+                    self.buffer.remove(self.cursor_index);
+                }
+                None
+            }
+            KeyCode::Left => {
+                if self.cursor_index > 0 {
+                    self.cursor_index -= 1;
+                }
+                None
+            }
+            KeyCode::Right => {
+                if self.cursor_index < self.buffer.len() {
+                    self.cursor_index += 1;
+                }
+                None
+            }
+            KeyCode::Home => {
+                self.cursor_index = 0;
+                None
+            }
+            KeyCode::End => {
+                self.cursor_index = self.buffer.len();
+                None
+            }
+            KeyCode::Up => {
+                self.show_help = false;
+                if !self.history.is_empty() {
+                    if self.history_index.is_none() {
+                        self.temp_buffer = self.buffer.clone();
+                        let new_idx = self.history.len() - 1;
+                        self.history_index = Some(new_idx);
+                        self.buffer = self.history[new_idx].chars().collect();
+                        self.cursor_index = self.buffer.len();
+                    } else if let Some(idx) = self.history_index {
+                        if idx > 0 {
+                            let new_idx = idx - 1;
+                            self.history_index = Some(new_idx);
+                            self.buffer = self.history[new_idx].chars().collect();
+                            self.cursor_index = self.buffer.len();
+                        }
+                    }
+                }
+                None
+            }
+            KeyCode::Down => {
+                self.show_help = false;
+                if let Some(idx) = self.history_index {
+                    if idx + 1 < self.history.len() {
+                        let new_idx = idx + 1;
+                        self.history_index = Some(new_idx);
+                        self.buffer = self.history[new_idx].chars().collect();
+                        self.cursor_index = self.buffer.len();
+                    } else {
+                        self.history_index = None;
+                        self.buffer = self.temp_buffer.clone();
+                        self.cursor_index = self.buffer.len();
+                    }
+                }
+                None
+            }
+            KeyCode::Tab => {
+                let input_str: String = self.buffer.iter().collect();
+                if input_str.starts_with("/theme ") {
+                    if self.tab_matches.is_empty() {
+                        self.pre_tab_buffer = self.buffer.clone();
+                        let query = &input_str[7..];
+                        let matches: Vec<String> = THEME_NAMES.iter()
+                            .filter(|t| t.starts_with(query))
+                            .map(|t| format!("/theme {}", t))
+                            .collect();
+                        if !matches.is_empty() {
+                            self.tab_matches = matches;
+                            self.tab_index = Some(0);
+                            self.buffer = self.tab_matches[0].chars().collect();
+                            self.cursor_index = self.buffer.len();
+                        }
+                    } else if let Some(idx) = self.tab_index {
+                        let next_idx = (idx + 1) % self.tab_matches.len();
+                        self.tab_index = Some(next_idx);
+                        self.buffer = self.tab_matches[next_idx].chars().collect();
+                        self.cursor_index = self.buffer.len();
+                    }
+                } else if input_str.starts_with('/') {
+                    if self.tab_matches.is_empty() {
+                        self.pre_tab_buffer = self.buffer.clone();
+                        let matches: Vec<String> = COMMANDS.iter()
+                            .filter(|cmd| cmd.starts_with(&input_str))
+                            .map(|s| s.to_string())
+                            .collect();
+                        if !matches.is_empty() {
+                            self.tab_matches = matches;
+                            self.tab_index = Some(0);
+                            self.buffer = self.tab_matches[0].chars().collect();
+                            self.cursor_index = self.buffer.len();
+                        }
+                    } else if let Some(idx) = self.tab_index {
+                        let next_idx = (idx + 1) % self.tab_matches.len();
+                        self.tab_index = Some(next_idx);
+                        self.buffer = self.tab_matches[next_idx].chars().collect();
+                        self.cursor_index = self.buffer.len();
+                    }
+                }
+                None
+            }
+            KeyCode::Esc => {
+                self.show_help = false;
+                self.tab_index = None;
+                self.tab_matches.clear();
+                self.pre_tab_buffer.clear();
+                None
+            }
+            KeyCode::Enter => {
+                self.show_help = false;
+                let content: String = self.buffer.iter().collect();
+                self.buffer.clear();
+                self.cursor_index = 0;
+                self.history_index = None;
+                if !content.trim().is_empty() {
+                    if self.history.last() != Some(&content) {
+                        self.history.push(content.clone());
+                    }
+                    Some(content)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+fn get_visible_prompt_and_cursor(
+    buffer: &[char],
+    cursor_index: usize,
+    width: usize,
+) -> (String, usize) {
+    let max_len = width.saturating_sub(5);
+    if max_len == 0 {
+        return (String::new(), 0);
+    }
+    if buffer.len() <= max_len {
+        (buffer.iter().collect(), cursor_index)
+    } else {
+        let half = max_len / 2;
+        let start = cursor_index.saturating_sub(half);
+        let end = (start + max_len).min(buffer.len());
+        let start = if end == buffer.len() {
+            buffer.len().saturating_sub(max_len)
+        } else {
+            start
+        };
+        let visible_str: String = buffer[start..end].iter().collect();
+        let visible_cursor = cursor_index - start;
+        (visible_str, visible_cursor)
+    }
+}
+
+fn print_welcome_banner(server_name: &str, username: &str, colors: ThemeColors) {
+    println!();
+    println!("{}", r"████████╗███████╗██████╗ ███╗   ███╗ ██████╗██╗  ██╗ █████╗ ████████╗".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!("{}", r"╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██╔════╝██║  ██║██╔══██╗╚══██╔══╝".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!("{}", r"   ██║   █████╗  ██████╔╝██╔████╔██║██║     ███████║███████║   ██║   ".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!("{}", r"   ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║     ██╔══██║██╔══██║   ██║   ".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!("{}", r"   ██║   ███████╗██║  ██║██║ ╚═╝ ██║╚██████╗██║  ██║██║  ██║   ██║   ".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!("{}", r"   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    println!();
+    println!(
+        "  {} Connected to {} as {}",
+        "✓".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
+        server_name.bold().truecolor(colors.accent.0, colors.accent.1, colors.accent.2),
+        username.bold().truecolor(colors.title.0, colors.title.1, colors.title.2)
+    );
+    println!(
+        "  {} Press {} for shortcuts, or type {} to exit.",
+        "ℹ".truecolor(colors.title.0, colors.title.1, colors.title.2).bold(),
+        "?".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
+        "/exit".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold()
+    );
+    println!();
+}
+
+fn print_help(colors: ThemeColors) {
+    print!("{}\r\n", "  ── TermChat Shortcuts & Commands ──".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/help", "Show this help menu");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/users", "List all online users");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/clear", "Clear screen");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/exit", "Exit the chat client");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/theme <name>", "Change color theme");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+C", "Exit the chat client");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+L", "Clear screen");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Up/Down", "Navigate message history");
+    print!("{}\r\n", "  ───────────────────────────────────".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
+}
+
+fn is_showing_suggestions(state: &InputState) -> bool {
+    let input_str: String = state.buffer.iter().collect();
+    if input_str.starts_with("/theme ") {
+        let query = &input_str[7..];
+        let matches_count = THEME_NAMES.iter()
+            .filter(|t| t.starts_with(query) && format!("/theme {}", t) != input_str)
+            .count();
+        matches_count > 0
+    } else if input_str.starts_with('/') && !input_str.is_empty() {
+        let matches_count = COMMANDS.iter()
+            .filter(|cmd| cmd.starts_with(&input_str) && **cmd != input_str)
+            .count();
+        matches_count > 0
+    } else {
+        false
+    }
+}
+
+fn print_suggestions(state: &InputState, colors: ThemeColors) {
+    let input_str: String = state.buffer.iter().collect();
+    let matches: Vec<String> = if input_str.starts_with("/theme ") {
+        let query = &input_str[7..];
+        THEME_NAMES.iter()
+            .filter(|t| t.starts_with(query))
+            .map(|t| format!("/theme {}", t))
+            .collect()
+    } else {
+        COMMANDS.iter()
+            .filter(|cmd| cmd.starts_with(&input_str))
+            .map(|s| s.to_string())
+            .collect()
+    };
+
+    print!("  {}", "Suggestions:".truecolor(colors.status.0, colors.status.1, colors.status.2));
+    for (i, m) in matches.iter().enumerate() {
+        let is_selected = state.tab_index.map_or(false, |idx| state.tab_matches.get(idx) == Some(m));
+        if is_selected {
+            print!(" {}", m.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold().underline());
+        } else {
+            print!(" {}", m.truecolor(colors.title.0, colors.title.1, colors.title.2));
+        }
+        if i + 1 < matches.len() {
+            print!(",");
+        }
+    }
+    print!(" {}\r\n", "(Tab to autocomplete, Esc to close)".truecolor(80, 95, 100).italic());
+}
+
+fn get_lines_above_input(state: &InputState) -> u16 {
+    let mut lines = 1;
+    if state.show_help {
+        lines += 9;
+    }
+    if is_showing_suggestions(state) {
+        lines += 1;
+    }
+    lines
+}
+
+fn clear_screen() {
+    let mut stdout = io::stdout();
+    let _ = execute!(
+        stdout,
+        terminal::Clear(terminal::ClearType::All),
+        cursor::MoveTo(0, 0)
+    );
+}
+
+fn print_message(message: &ServerToClient, colors: ThemeColors) {
+    match message {
+        ServerToClient::Broadcast { sender, content, timestamp } => {
+            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
+            let display_name = format_username(sender);
+            let colored_name = get_colored_name(&display_name);
+            print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, content);
+        }
+        ServerToClient::SystemAlert { content, .. } => {
+            print!(" {} {}\r\n", "✦".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(), content.dimmed());
+        }
+        ServerToClient::Error { message } => {
+            print!(" {} {}\r\n", "✖".red().bold(), message.red());
+        }
+        _ => {}
+    }
+}
+
+fn draw_prompt(
+    state: &InputState,
+    server_name: &str,
+    username: &str,
+    prev_lines_above: Option<u16>,
+) -> Result<(), io::Error> {
+    let colors = ThemeColors::get(&state.theme_name);
+    let mut stdout = io::stdout();
+    let (width, _) = terminal::size().unwrap_or((80, 24));
+    let width = width as usize;
+
+    execute!(stdout, cursor::MoveToColumn(0))?;
+    if let Some(up) = prev_lines_above {
+        if up > 0 {
+            execute!(stdout, cursor::MoveUp(up))?;
+        }
+    }
+    execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
+
+    if state.show_help {
+        print_help(colors);
+    }
+
+    if is_showing_suggestions(state) {
+        print_suggestions(state, colors);
+    }
+
+    // Draw separator 1
+    let sep_char = "─".repeat(width);
+    let sep_color = sep_char.truecolor(colors.line.0, colors.line.1, colors.line.2);
+    print!("{}\r\n", sep_color);
+
+    // Get visible input based on terminal width
+    let (visible_buffer, visible_cursor) = get_visible_prompt_and_cursor(&state.buffer, state.cursor_index, width);
+
+    // Draw input line
+    let prompt_sym = "> ".truecolor(colors.prompt.0, colors.prompt.1, colors.prompt.2).bold();
+    print!("{}{}\r\n", prompt_sym, visible_buffer);
+
+    // Draw separator 2
+    print!("{}\r\n", sep_color);
+
+    // Draw status bar
+    let left_text = " ? for shortcuts ".truecolor(colors.status.0, colors.status.1, colors.status.2);
+    let right_text = format!(" {} • {} ", username, server_name).truecolor(colors.status.0, colors.status.1, colors.status.2);
+    
+    let left_len = 17;
+    let right_len = username.chars().count() + server_name.chars().count() + 6;
+    let spaces_count = width.saturating_sub(left_len + right_len + 1);
+    let spaces = " ".repeat(spaces_count);
+
+    print!("{}{}{}", left_text, spaces, right_text);
+
+    execute!(
+        stdout,
+        cursor::MoveUp(2),
+        cursor::MoveToColumn((2 + visible_cursor) as u16)
+    )?;
+    stdout.flush()?;
+
+    Ok(())
+}
+
+fn handle_incoming_message(
+    msg: ServerToClient,
+    input_state: &InputState,
+    server_name: &str,
+    username: &str,
+) {
+    let colors = ThemeColors::get(&input_state.theme_name);
+    let mut stdout = io::stdout();
+    let prev_lines_above = get_lines_above_input(input_state);
+    let _ = execute!(stdout, cursor::MoveToColumn(0));
+    if prev_lines_above > 0 {
+        let _ = execute!(stdout, cursor::MoveUp(prev_lines_above));
+    }
+    let _ = execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown));
+
+    print_message(&msg, colors);
+
+    let _ = draw_prompt(input_state, server_name, username, None);
+}
+
 pub async fn run(
     ip: String,
     port: u16,
     name: String,
     token: String,
+    theme_name: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
-    logger!(Info, "Attempting to connect to {}...", addr);
+    println!("Connecting to {}...", addr);
 
     let stream = TcpStream::connect(&addr).await?;
     let mut framed = Framed::new(stream, LinesCodec::new());
 
-    let handshake = ClientToServer::Handshake { name, token };
+    let handshake = ClientToServer::Handshake {
+        name: name.clone(),
+        token,
+    };
     let handshake_json = serde_json::to_string(&handshake)?;
     framed.send(handshake_json).await?;
 
-    logger!(Info, "Handshake sent! Authenticating...");
+    println!("Authenticating...");
 
-    match framed.next().await {
+    let server_name = match framed.next().await {
         Some(Ok(line)) => {
             let response: ServerToClient = serde_json::from_str(&line)?;
             match response {
-                ServerToClient::Welcome { server_name } => {
-                    logger!(Info, "Successfully joined server '{}'", server_name.bold());
-                }
+                ServerToClient::Welcome { server_name } => server_name,
                 ServerToClient::Error { message } => {
-                    logger!(Error, "Connection rejected: {}", message);
+                    eprintln!("{} Connection rejected: {}", "✖".red().bold(), message.red());
                     return Ok(());
                 }
                 _ => {
-                    logger!(Error, "Unexpected server response during handshake");
+                    eprintln!("{} Unexpected response from server", "✖".red().bold());
                     return Ok(());
                 }
             }
         }
         Some(Err(e)) => {
-            logger!(Error, "Failed to read from server: {}", e);
+            eprintln!("{} Failed to read handshake response: {}", "✖".red().bold(), e);
             return Ok(());
         }
         None => {
-            logger!(
-                Error,
-                "Connection closed by server before authentication completed."
-            );
+            eprintln!("{} Connection closed by server", "✖".red().bold());
             return Ok(());
         }
-    }
+    };
 
-    let mut stdin = FramedRead::new(tokio::io::stdin(), LinesCodec::new());
+    let colors = ThemeColors::get(&theme_name);
+    print_welcome_banner(&server_name, &name, colors);
 
-    print!("{} ", ">".bright_black().bold());
-    io::stdout().flush().unwrap();
+    let mut input_state = InputState::new(theme_name);
+
+    let (key_tx, mut key_rx) = tokio::sync::mpsc::channel::<Event>(100);
+    std::thread::spawn(move || {
+        loop {
+            match event::read() {
+                Ok(evt) => {
+                    if key_tx.blocking_send(evt).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let _raw_guard = RawModeGuard::new();
+    draw_prompt(&input_state, &server_name, &name, None)?;
 
     loop {
         tokio::select! {
-                    Some(Ok(line)) = stdin.next() => {
-                        print!("\x1B[1A\x1B[2K\r");
-                        io::stdout().flush().unwrap();
+            Some(evt) = key_rx.recv() => {
+                match evt {
+                    Event::Key(key_event) => {
+                        let prev_lines_above = get_lines_above_input(&input_state);
 
-                        let chat_msg = ClientToServer::ChatMessage { content: line };
-                        if let Ok(json) = serde_json::to_string(&chat_msg) {
-                            if framed.send(json).await.is_err() {
-                                logger!(Error, "Lost connection to server.");
+                        if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
+                            input_state.show_help = true;
+                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                            continue;
+                        }
+
+                        if let Some(cmd) = input_state.handle_key(key_event) {
+                            if cmd == "/exit" {
+                                let _ = terminal::disable_raw_mode();
+                                println!("\r\nDisconnecting from chat...");
                                 break;
-                            }
-                        }
-
-                        print!("{} ", ">".bright_black().bold());
-                        io::stdout().flush().unwrap();
-                    }
-
-        result = framed.next() => {
-                        match result {
-                            Some(Ok(line)) => {
-                                if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
-                                    print!("\r\x1B[2K");
-                                    io::stdout().flush().unwrap();
-
-                                    match msg {
-                                        ServerToClient::Broadcast { sender, content, timestamp } => {
-                                            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
-                                            let display_name = format_username(&sender);
-
-                                            logger!(Info, "{} {}: {}",
-                                                local_time.to_string().dimmed(),
-                                                display_name.blue().bold(),
-                                                content
-                                            );
-                                        }
-                                        ServerToClient::SystemAlert { content, .. } => {
-                                            logger!(Info, "{}", content.yellow());
-                                        }
-                                        _ => {}
-                                    }
-
-                                    print!("{} ", ">".bright_black().bold());
-                                    io::stdout().flush().unwrap();
+                            } else if cmd == "/clear" {
+                                clear_screen();
+                                let current_colors = ThemeColors::get(&input_state.theme_name);
+                                print_welcome_banner(&server_name, &name, current_colors);
+                                let _ = draw_prompt(&input_state, &server_name, &name, None);
+                            } else if cmd == "/help" {
+                                input_state.show_help = true;
+                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
+                            } else if cmd.starts_with("/theme ") {
+                                let target_theme = cmd[7..].trim().to_lowercase();
+                                if THEME_NAMES.contains(&target_theme.as_str()) {
+                                    input_state.theme_name = target_theme.clone();
+                                    let _ = crate::config::update_theme(target_theme.clone());
+                                    
+                                    // Trigger inline theme success alert
+                                    let info_msg = ServerToClient::SystemAlert {
+                                        content: format!("Theme changed to '{}' successfully!", target_theme),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(info_msg, &input_state, &server_name, &name);
+                                } else {
+                                    let error_msg = ServerToClient::Error {
+                                        message: format!("Unknown theme '{}'. Options: blurple, matrix, cyberpunk, sunset", target_theme),
+                                    };
+                                    handle_incoming_message(error_msg, &input_state, &server_name, &name);
                                 }
+                            } else {
+                                let chat_msg = ClientToServer::ChatMessage { content: cmd };
+                                if let Ok(json) = serde_json::to_string(&chat_msg) {
+                                    if framed.send(json).await.is_err() {
+                                        let _ = terminal::disable_raw_mode();
+                                        eprintln!("\r\n{} Lost connection to server.", "✖".red().bold());
+                                        break;
+                                    }
+                                }
+                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
                             }
-                            _ => {
-                                print!("\r\x1B[2K");
-                                logger!(Error, "Connection closed by server.");
-                                std::process::exit(0);
-                            }
+                        } else {
+                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above));
                         }
                     }
+                    Event::Resize(_, _) => {
+                        let _ = draw_prompt(&input_state, &server_name, &name, None);
+                    }
+                    _ => {}
+                }
+            }
 
-                    _ = signal::ctrl_c() => {
-                        print!("\r\x1B[2K");
-                        logger!(Info, "Disconnecting from chat...");
-                        std::process::exit(0);
+            result = framed.next() => {
+                match result {
+                    Some(Ok(line)) => {
+                        if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
+                            handle_incoming_message(msg, &input_state, &server_name, &name);
+                        }
+                    }
+                    _ => {
+                        let _ = terminal::disable_raw_mode();
+                        eprintln!("\r\n{} Connection closed by server.", "✖".red().bold());
+                        break;
                     }
                 }
+            }
+        }
     }
 
     Ok(())

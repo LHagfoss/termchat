@@ -1,5 +1,6 @@
 pub mod state;
 
+use colored::Colorize;
 use futures::{SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -12,7 +13,34 @@ use crate::protocol::{ClientToServer, ServerToClient};
 use lagos_logger::{Level::*, logger};
 use state::ServerState;
 
+fn copy_to_clipboard(text: &str) -> bool {
+    use std::process::{Command, Stdio};
+    use std::io::Write;
+
+    if let Ok(mut child) = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            if stdin.write_all(text.as_bytes()).is_err() {
+                return false;
+            }
+        }
+        return child.wait().map(|status| status.success()).unwrap_or(false);
+    }
+    false
+}
+
 pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!("{}", r"████████╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ ".truecolor(114, 137, 218).bold());
+    println!("{}", r"╚══██╔══╝██╔════╝    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗".truecolor(114, 137, 218).bold());
+    println!("{}", r"   ██║   ██║         ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝".truecolor(114, 137, 218).bold());
+    println!("{}", r"   ██║   ██║         ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗".truecolor(114, 137, 218).bold());
+    println!("{}", r"   ██║   ╚██████╗    ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║".truecolor(114, 137, 218).bold());
+    println!("{}", r"   ╚═╝    ╚═════╝    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝".truecolor(114, 137, 218).bold());
+    println!();
+
     let addr = format!("{}:{}", ip, port);
     let listener = TcpListener::bind(&addr).await?;
 
@@ -20,14 +48,35 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
 
     logger!(Info, "Server '{}' initialized", name);
     logger!(Info, "Listening on {}", addr);
-    logger!(Info, "Secure token: {}", token);
+    
+    let copied_auto = copy_to_clipboard(&token);
+    logger!(Info, "Secure token: {}{}", token, if copied_auto { " (copied to clipboard)" } else { "" });
 
     let (tx, _) = broadcast::channel::<ServerToClient>(100);
     let state = Arc::new(ServerState {
         server_name: name.clone(),
-        token,
+        token: token.clone(),
         tx,
         users: tokio::sync::Mutex::new(HashSet::new()),
+    });
+
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
+    let token_clone = token.clone();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            if let Ok(line) = line {
+                let trimmed = line.trim();
+                if trimmed.eq_ignore_ascii_case("c") || trimmed.eq_ignore_ascii_case("copy") {
+                    if input_tx.blocking_send(token_clone.clone()).is_err() {
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
     });
 
     loop {
@@ -49,7 +98,14 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
                             }
                         }
                     }
-        _ = signal::ctrl_c() => {
+                    Some(token_to_copy) = input_rx.recv() => {
+                        if copy_to_clipboard(&token_to_copy) {
+                            logger!(Info, "Secure token copied to clipboard successfully!");
+                        } else {
+                            logger!(Warn, "Failed to copy token to clipboard.");
+                        }
+                    }
+                    _ = signal::ctrl_c() => {
                         logger!(Info, "Stopping server...");
 
                         let shutdown_alert = ServerToClient::SystemAlert {

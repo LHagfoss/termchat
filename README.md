@@ -14,9 +14,10 @@ A fast, asynchronous, bi-directional chat server and client built entirely for t
 ## list of features
 
 - [x] server and client connection
+- [x] inline chat commands (/theme, /random shi)
+- [x] theme
 - [ ] TUI - ratatui for nice ui
 - [ ] persistant chat or history
-- [ ] inline chat commands (/theme, /random shi)
 - [ ] better managment with user (auth and config idk)
 
 ## Installation
