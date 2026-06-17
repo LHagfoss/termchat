@@ -184,13 +184,13 @@ async fn handle_client(
     };
     let _ = state.tx.send(join_alert);
 
+    let mut rx = state.tx.subscribe();
+
     let active_users = {
         let u = state.users.lock().await;
         u.iter().cloned().collect::<Vec<String>>()
     };
     let _ = state.tx.send(ServerToClient::UsersList { users: active_users });
-
-    let mut rx = state.tx.subscribe();
 
     loop {
         tokio::select! {

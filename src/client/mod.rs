@@ -957,12 +957,14 @@ pub async fn run(
                                         } else {
                                             typing_users.remove(&sender);
                                         }
-                                        let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                        let prev_lines_above = get_lines_above_input(&input_state);
+                                        let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                                     }
                                 }
                                 ServerToClient::UsersList { users } => {
                                     input_state.online_users = users;
-                                    let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                    let prev_lines_above = get_lines_above_input(&input_state);
+                                    let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                                 }
                                 _ => {
                                     handle_incoming_message(msg, &mut input_state, &server_name, &name, &typing_users);
