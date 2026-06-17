@@ -42,7 +42,7 @@ fn copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("   {}", r"████████╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ ".truecolor(236, 110, 93).bold());
     println!("   {}", r"╚══██╔══╝██╔════╝    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗".truecolor(236, 110, 93).bold());
@@ -69,6 +69,7 @@ pub async fn run(name: String, ip: String, port: u16) -> Result<(), Box<dyn std:
         token: token.clone(),
         tx,
         users: tokio::sync::Mutex::new(HashSet::new()),
+        debug,
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
@@ -200,6 +201,10 @@ async fn handle_client(
                 };
 
                 if let Ok(client_msg) = serde_json::from_str::<ClientToServer>(&line) {
+                    if state.debug {
+                        server_log!(Debug, "Received from '{}': {:?}", username, client_msg);
+                    }
+
                     match client_msg {
                         ClientToServer::ChatMessage { content } => {
                             if content.trim() == "/users" {
@@ -222,6 +227,9 @@ async fn handle_client(
                                 content,
                                 timestamp: chrono::Utc::now(),
                             };
+                            if state.debug {
+                                server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
+                            }
                             let _ = state.tx.send(broadcast_msg);
                         }
                         ClientToServer::Typing { is_typing } => {
@@ -239,13 +247,21 @@ async fn handle_client(
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
+                        if state.debug {
+                            server_log!(Debug, "Sending to '{}': {:?}", username, msg);
+                        }
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if framed.send(json).await.is_err() {
                                 break;
                             }
                         }
                     }
-                    Err(_) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        server_log!(Warn, "Connection for '{}' lagged by {} messages", username, skipped);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 }
             }
         }

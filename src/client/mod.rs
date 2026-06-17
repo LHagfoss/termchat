@@ -12,7 +12,7 @@ use crossterm::{
 
 use crate::protocol::{ClientToServer, ServerToClient};
 
-const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme"];
+const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme", "/debug"];
 const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset", "lagos", "mint", "lavender"];
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +143,7 @@ struct InputState {
     tab_word_start: Option<usize>,
     theme_name: String,
     online_users: Vec<String>,
+    debug: bool,
 }
 
 impl InputState {
@@ -161,6 +162,7 @@ impl InputState {
             tab_word_start: None,
             theme_name,
             online_users: Vec::new(),
+            debug: false,
         }
     }
 
@@ -435,6 +437,7 @@ fn print_help(colors: ThemeColors) {
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/clear", "Clear screen");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/refresh", "Clear screen & show welcome banner");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/info", "Show connection info");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/debug", "Toggle local debug mode");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/exit", "Exit the chat client");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/theme <name>", "Change color theme");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+C", "Exit the chat client");
@@ -526,7 +529,7 @@ fn print_suggestions(state: &InputState, colors: ThemeColors) {
 fn get_lines_above_input(state: &InputState) -> u16 {
     let mut lines = 1;
     if state.show_help {
-        lines += 12; // help prints 12 lines now
+        lines += 13; // help prints 13 lines now
     }
     if is_showing_suggestions(state) {
         lines += 1;
@@ -858,6 +861,14 @@ pub async fn run(
                                 let info_colors = ThemeColors::get(&input_state.theme_name);
                                 print_info(&ip, port, &name, &server_name, &token, &input_state.theme_name, info_colors);
                                 let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                            } else if cmd == "/debug" {
+                                input_state.debug = !input_state.debug;
+                                let status = if input_state.debug { "enabled" } else { "disabled" };
+                                let debug_msg = ServerToClient::SystemAlert {
+                                    content: format!("Local client debugging {}", status),
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                handle_incoming_message(debug_msg, &mut input_state, &server_name, &name, &typing_users);
                             } else if cmd.starts_with("/theme ") {
                                 let target_theme = cmd[7..].trim().to_lowercase();
                                 if THEME_NAMES.contains(&target_theme.as_str()) {
@@ -877,6 +888,13 @@ pub async fn run(
                                 }
                             } else {
                                 let chat_msg = ClientToServer::ChatMessage { content: cmd };
+                                if input_state.debug {
+                                    let debug_alert = ServerToClient::SystemAlert {
+                                        content: format!("[DEBUG] Sent: {:?}", chat_msg),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                                }
                                 if let Ok(json) = serde_json::to_string(&chat_msg) {
                                     if framed.send(json).await.is_err() {
                                         let _ = terminal::disable_raw_mode();
@@ -892,12 +910,26 @@ pub async fn run(
                             if !currently_empty && !client_is_typing {
                                 client_is_typing = true;
                                 let start_typing = ClientToServer::Typing { is_typing: true };
+                                if input_state.debug {
+                                    let debug_alert = ServerToClient::SystemAlert {
+                                        content: format!("[DEBUG] Sent: {:?}", start_typing),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                                }
                                 if let Ok(json) = serde_json::to_string(&start_typing) {
                                     let _ = framed.send(json).await;
                                 }
                             } else if currently_empty && client_is_typing {
                                 client_is_typing = false;
                                 let stop_typing = ClientToServer::Typing { is_typing: false };
+                                if input_state.debug {
+                                    let debug_alert = ServerToClient::SystemAlert {
+                                        content: format!("[DEBUG] Sent: {:?}", stop_typing),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                                }
                                 if let Ok(json) = serde_json::to_string(&stop_typing) {
                                     let _ = framed.send(json).await;
                                 }
@@ -917,6 +949,13 @@ pub async fn run(
                 match result {
                     Some(Ok(line)) => {
                         if let Ok(msg) = serde_json::from_str::<ServerToClient>(&line) {
+                            if input_state.debug {
+                                let debug_alert = ServerToClient::SystemAlert {
+                                    content: format!("[DEBUG] Received: {:?}", msg),
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                            }
                             match msg {
                                 ServerToClient::UserTyping { sender, is_typing } => {
                                     if sender != name {

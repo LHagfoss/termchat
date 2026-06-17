@@ -18,6 +18,9 @@ pub enum Commands {
 
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
+
+        #[arg(short, long)]
+        debug: bool,
     },
     Join {
         #[arg(short, long)]

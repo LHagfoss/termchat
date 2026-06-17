@@ -7,4 +7,5 @@ pub struct ServerState {
     pub token: String,
     pub tx: broadcast::Sender<ServerToClient>,
     pub users: Mutex<HashSet<String>>,
+    pub debug: bool,
 }
