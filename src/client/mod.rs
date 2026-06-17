@@ -139,7 +139,11 @@ struct InputState {
     tab_matches: Vec<String>,
     tab_index: Option<usize>,
     pre_tab_buffer: Vec<char>,
+    pre_tab_cursor: usize,
+    tab_word_start: Option<usize>,
     theme_name: String,
+    last_drawn_lines: u16,
+    online_users: Vec<String>,
 }
 
 impl InputState {
@@ -154,7 +158,11 @@ impl InputState {
             tab_matches: Vec::new(),
             tab_index: None,
             pre_tab_buffer: Vec::new(),
+            pre_tab_cursor: 0,
+            tab_word_start: None,
             theme_name,
+            last_drawn_lines: 0,
+            online_users: Vec::new(),
         }
     }
 
@@ -167,6 +175,8 @@ impl InputState {
             self.tab_index = None;
             self.tab_matches.clear();
             self.pre_tab_buffer.clear();
+            self.pre_tab_cursor = 0;
+            self.tab_word_start = None;
         }
 
         match key_event.code {
@@ -257,9 +267,13 @@ impl InputState {
             }
             KeyCode::Tab => {
                 let input_str: String = self.buffer.iter().collect();
-                if input_str.starts_with("/theme ") {
-                    if self.tab_matches.is_empty() {
+                let current_cursor = self.cursor_index;
+                
+                if self.tab_matches.is_empty() {
+                    if input_str.starts_with("/theme ") {
                         self.pre_tab_buffer = self.buffer.clone();
+                        self.pre_tab_cursor = current_cursor;
+                        self.tab_word_start = Some(7);
                         let query = &input_str[7..];
                         let matches: Vec<String> = THEME_NAMES.iter()
                             .filter(|t| t.starts_with(query))
@@ -271,30 +285,68 @@ impl InputState {
                             self.buffer = self.tab_matches[0].chars().collect();
                             self.cursor_index = self.buffer.len();
                         }
-                    } else if let Some(idx) = self.tab_index {
-                        let next_idx = (idx + 1) % self.tab_matches.len();
-                        self.tab_index = Some(next_idx);
-                        self.buffer = self.tab_matches[next_idx].chars().collect();
-                        self.cursor_index = self.buffer.len();
-                    }
-                } else if input_str.starts_with('/') {
-                    if self.tab_matches.is_empty() {
-                        self.pre_tab_buffer = self.buffer.clone();
-                        let matches: Vec<String> = COMMANDS.iter()
-                            .filter(|cmd| cmd.starts_with(&input_str))
-                            .map(|s| s.to_string())
-                            .collect();
-                        if !matches.is_empty() {
-                            self.tab_matches = matches;
-                            self.tab_index = Some(0);
-                            self.buffer = self.tab_matches[0].chars().collect();
-                            self.cursor_index = self.buffer.len();
+                    } else {
+                        let before_cursor = &self.buffer[..current_cursor];
+                        let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
+                        let word: String = before_cursor[word_start..].iter().collect();
+
+                        if word.starts_with('@') {
+                            let query = &word[1..].to_lowercase();
+                            self.pre_tab_buffer = self.buffer.clone();
+                            self.pre_tab_cursor = current_cursor;
+                            self.tab_word_start = Some(word_start);
+
+                            let matches: Vec<String> = self.online_users.iter()
+                                .filter(|u| u.to_lowercase().starts_with(query))
+                                .map(|u| format!("@{}", u))
+                                .collect();
+
+                            if !matches.is_empty() {
+                                self.tab_matches = matches;
+                                self.tab_index = Some(0);
+
+                                let mut new_buf = self.pre_tab_buffer[..word_start].to_vec();
+                                new_buf.extend(self.tab_matches[0].chars());
+                                new_buf.extend(&self.pre_tab_buffer[current_cursor..]);
+                                self.buffer = new_buf;
+                                self.cursor_index = word_start + self.tab_matches[0].chars().count();
+                            }
+                        } else if word.starts_with('/') {
+                            self.pre_tab_buffer = self.buffer.clone();
+                            self.pre_tab_cursor = current_cursor;
+                            self.tab_word_start = Some(word_start);
+
+                            let matches: Vec<String> = COMMANDS.iter()
+                                .filter(|cmd| cmd.starts_with(&word))
+                                .map(|s| s.to_string())
+                                .collect();
+
+                            if !matches.is_empty() {
+                                self.tab_matches = matches;
+                                self.tab_index = Some(0);
+
+                                let mut new_buf = self.pre_tab_buffer[..word_start].to_vec();
+                                new_buf.extend(self.tab_matches[0].chars());
+                                new_buf.extend(&self.pre_tab_buffer[current_cursor..]);
+                                self.buffer = new_buf;
+                                self.cursor_index = word_start + self.tab_matches[0].chars().count();
+                            }
                         }
-                    } else if let Some(idx) = self.tab_index {
-                        let next_idx = (idx + 1) % self.tab_matches.len();
-                        self.tab_index = Some(next_idx);
+                    }
+                } else if let (Some(idx), Some(word_start)) = (self.tab_index, self.tab_word_start) {
+                    let next_idx = (idx + 1) % self.tab_matches.len();
+                    self.tab_index = Some(next_idx);
+
+                    let orig_cursor = self.pre_tab_cursor;
+                    if input_str.starts_with("/theme ") {
                         self.buffer = self.tab_matches[next_idx].chars().collect();
                         self.cursor_index = self.buffer.len();
+                    } else {
+                        let mut new_buf = self.pre_tab_buffer[..word_start].to_vec();
+                        new_buf.extend(self.tab_matches[next_idx].chars());
+                        new_buf.extend(&self.pre_tab_buffer[orig_cursor..]);
+                        self.buffer = new_buf;
+                        self.cursor_index = word_start + self.tab_matches[next_idx].chars().count();
                     }
                 }
                 None
@@ -304,6 +356,8 @@ impl InputState {
                 self.tab_index = None;
                 self.tab_matches.clear();
                 self.pre_tab_buffer.clear();
+                self.pre_tab_cursor = 0;
+                self.tab_word_start = None;
                 None
             }
             KeyCode::Enter => {
@@ -415,7 +469,19 @@ fn is_showing_suggestions(state: &InputState) -> bool {
             .count();
         matches_count > 0
     } else {
-        false
+        let current_cursor = state.cursor_index;
+        let before_cursor = &state.buffer[..current_cursor];
+        let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
+        let word: String = before_cursor[word_start..].iter().collect();
+        if word.starts_with('@') {
+            let query = &word[1..].to_lowercase();
+            let matches_count = state.online_users.iter()
+                .filter(|u| u.to_lowercase().starts_with(query) && format!("@{}", u.to_lowercase()) != word.to_lowercase())
+                .count();
+            matches_count > 0
+        } else {
+            false
+        }
     }
 }
 
@@ -427,10 +493,20 @@ fn print_suggestions(state: &InputState, colors: ThemeColors) {
             .filter(|t| t.starts_with(query))
             .map(|t| format!("/theme {}", t))
             .collect()
-    } else {
+    } else if input_str.starts_with('/') {
         COMMANDS.iter()
             .filter(|cmd| cmd.starts_with(&input_str))
             .map(|s| s.to_string())
+            .collect()
+    } else {
+        let current_cursor = state.cursor_index;
+        let before_cursor = &state.buffer[..current_cursor];
+        let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
+        let word: String = before_cursor[word_start..].iter().collect();
+        let query = &word[1..].to_lowercase();
+        state.online_users.iter()
+            .filter(|u| u.to_lowercase().starts_with(query))
+            .map(|u| format!("@{}", u))
             .collect()
     };
 
@@ -486,17 +562,13 @@ fn clear_screen() {
     );
 }
 
-fn highlight_mentions(content: &str, own_username: &str, colors: ThemeColors) -> (String, bool) {
+fn highlight_mentions(content: &str, own_username: &str, online_users: &[String], colors: ThemeColors) -> (String, bool) {
     let mut words = Vec::new();
     let mut has_self_mention = false;
     let own_lower = own_username.to_lowercase();
 
     for token in content.split(' ') {
         if let Some(at_idx) = token.find('@') {
-            // Check if the '@' is a valid mention prefix:
-            // 1. There is at least one character after '@'.
-            // 2. The character after '@' is alphanumeric.
-            // 3. Characters before '@' are only leading punctuation (not alphanumeric).
             let chars: Vec<char> = token.chars().collect();
             if at_idx + 1 < chars.len() && chars[at_idx + 1].is_alphanumeric() {
                 let leading_ok = chars[..at_idx].iter().all(|&c| !c.is_alphanumeric() && c != '@');
@@ -519,23 +591,28 @@ fn highlight_mentions(content: &str, own_username: &str, colors: ThemeColors) ->
 
                     let username_part: String = username_chars.into_iter().collect();
                     let punctuation_part: String = punctuation_chars.into_iter().collect();
+                    let username_part_lower = username_part.to_lowercase();
 
-                    if username_part.to_lowercase() == own_lower {
-                        has_self_mention = true;
-                        let formatted_mention = format!("@{}", username_part)
-                            .truecolor(0, 0, 0)
-                            .on_truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
-                            .bold()
-                            .to_string();
-                        words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
-                        continue;
-                    } else {
-                        let formatted_mention = format!("@{}", username_part)
-                            .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
-                            .bold()
-                            .to_string();
-                        words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
-                        continue;
+                    let is_online = online_users.iter().any(|u| u.to_lowercase() == username_part_lower);
+
+                    if is_online {
+                        if username_part_lower == own_lower {
+                            has_self_mention = true;
+                            let formatted_mention = format!("@{}", username_part)
+                                .truecolor(0, 0, 0)
+                                .on_truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                                .bold()
+                                .to_string();
+                            words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
+                            continue;
+                        } else {
+                            let formatted_mention = format!("@{}", username_part)
+                                .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                                .bold()
+                                .to_string();
+                            words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
+                            continue;
+                        }
                     }
                 }
             }
@@ -546,13 +623,13 @@ fn highlight_mentions(content: &str, own_username: &str, colors: ThemeColors) ->
     (words.join(" "), has_self_mention)
 }
 
-fn print_message(message: &ServerToClient, own_username: &str, colors: ThemeColors) {
+fn print_message(message: &ServerToClient, own_username: &str, online_users: &[String], colors: ThemeColors) {
     match message {
         ServerToClient::Broadcast { sender, content, timestamp } => {
             let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
             let display_name = format_username(sender);
             let colored_name = get_colored_name(&display_name);
-            let (highlighted_content, has_self_mention) = highlight_mentions(content, own_username, colors);
+            let (highlighted_content, has_self_mention) = highlight_mentions(content, own_username, online_users, colors);
             print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, highlighted_content);
             if has_self_mention {
                 print!("\x07"); // trigger terminal beep
@@ -570,7 +647,7 @@ fn print_message(message: &ServerToClient, own_username: &str, colors: ThemeColo
 }
 
 fn draw_prompt(
-    state: &InputState,
+    state: &mut InputState,
     server_name: &str,
     username: &str,
     prev_lines_above: Option<u16>,
@@ -581,18 +658,46 @@ fn draw_prompt(
     let (width, _) = terminal::size().unwrap_or((80, 24));
     let width = width as usize;
 
+    // 1. Position cursor to the start of the previous drawing block
     execute!(stdout, cursor::MoveToColumn(0))?;
     if let Some(up) = prev_lines_above {
         if up > 0 {
             execute!(stdout, cursor::MoveUp(up))?;
         }
     }
-    execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
 
+    // Calculate how many lines we will draw now
+    let current_lines_above = get_lines_above_input(state);
+    let current_total_lines = current_lines_above + 3;
+
+    // We need to clear the maximum of what we drew last time and what we draw now
+    let lines_to_clear = state.last_drawn_lines.max(current_total_lines);
+
+    // 2. Clear all the lines we might have drawn previously
+    for i in 0..lines_to_clear {
+        execute!(stdout, terminal::Clear(terminal::ClearType::CurrentLine))?;
+        if i + 1 < lines_to_clear {
+            execute!(stdout, cursor::MoveDown(1))?;
+        }
+    }
+
+    // 3. Move back up to the top of where we want to draw the NEW prompt block
+    if lines_to_clear > 1 {
+        execute!(stdout, cursor::MoveUp(lines_to_clear - 1))?;
+    }
+
+    // If the new block is smaller than the cleared area, offset start downwards
+    let start_offset = lines_to_clear.saturating_sub(current_total_lines);
+    if start_offset > 0 {
+        execute!(stdout, cursor::MoveDown(start_offset))?;
+    }
+
+    // Draw help if active
     if state.show_help {
         print_help(colors);
     }
 
+    // Draw suggestions if active
     if is_showing_suggestions(state) {
         print_suggestions(state, colors);
     }
@@ -634,12 +739,13 @@ fn draw_prompt(
     )?;
     stdout.flush()?;
 
+    state.last_drawn_lines = current_total_lines;
     Ok(())
 }
 
 fn handle_incoming_message(
     msg: ServerToClient,
-    input_state: &InputState,
+    input_state: &mut InputState,
     server_name: &str,
     username: &str,
     typing_users: &std::collections::HashSet<String>,
@@ -647,14 +753,26 @@ fn handle_incoming_message(
     let colors = ThemeColors::get(&input_state.theme_name);
     let mut stdout = io::stdout();
     let prev_lines_above = get_lines_above_input(input_state);
+    
+    // Clear the old prompt area entirely
     let _ = execute!(stdout, cursor::MoveToColumn(0));
     if prev_lines_above > 0 {
         let _ = execute!(stdout, cursor::MoveUp(prev_lines_above));
     }
-    let _ = execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown));
+    let total_lines = input_state.last_drawn_lines.max(prev_lines_above + 3);
+    for i in 0..total_lines {
+        let _ = execute!(stdout, terminal::Clear(terminal::ClearType::CurrentLine));
+        if i + 1 < total_lines {
+            let _ = execute!(stdout, cursor::MoveDown(1));
+        }
+    }
+    if total_lines > 1 {
+        let _ = execute!(stdout, cursor::MoveUp(total_lines - 1));
+    }
 
-    print_message(&msg, username, colors);
+    print_message(&msg, username, &input_state.online_users, colors);
 
+    input_state.last_drawn_lines = 0;
     let _ = draw_prompt(input_state, server_name, username, None, typing_users);
 }
 
@@ -727,7 +845,7 @@ pub async fn run(
     });
 
     let _raw_guard = RawModeGuard::new();
-    draw_prompt(&input_state, &server_name, &name, None, &typing_users)?;
+    draw_prompt(&mut input_state, &server_name, &name, None, &typing_users)?;
 
     loop {
         tokio::select! {
@@ -742,7 +860,7 @@ pub async fn run(
 
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
                             input_state.show_help = true;
-                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                            let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                             continue;
                         }
 
@@ -762,16 +880,16 @@ pub async fn run(
                                 break;
                             } else if cmd == "/clear" {
                                 clear_screen();
-                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
                             } else if cmd == "/refresh" {
                                 clear_screen();
                                 let current_colors = ThemeColors::get(&input_state.theme_name);
                                 print_welcome_banner(&server_name, &name, current_colors);
-                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
                             } else if cmd == "/info" {
                                 let info_colors = ThemeColors::get(&input_state.theme_name);
                                 print_info(&ip, port, &name, &server_name, &token, &input_state.theme_name, info_colors);
-                                let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
                             } else if cmd.starts_with("/theme ") {
                                 let target_theme = cmd[7..].trim().to_lowercase();
                                 if THEME_NAMES.contains(&target_theme.as_str()) {
@@ -782,12 +900,12 @@ pub async fn run(
                                         content: format!("Theme changed to '{}' successfully!", target_theme),
                                         timestamp: chrono::Utc::now(),
                                     };
-                                    handle_incoming_message(info_msg, &input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(info_msg, &mut input_state, &server_name, &name, &typing_users);
                                 } else {
                                     let error_msg = ServerToClient::Error {
                                         message: format!("Unknown theme '{}'. Options: blurple, matrix, cyberpunk, sunset", target_theme),
                                     };
-                                    handle_incoming_message(error_msg, &input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(error_msg, &mut input_state, &server_name, &name, &typing_users);
                                 }
                             } else {
                                 let chat_msg = ClientToServer::ChatMessage { content: cmd };
@@ -798,7 +916,7 @@ pub async fn run(
                                         break;
                                     }
                                 }
-                                let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                                let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                             }
                         } else {
                             // Check typing state changes
@@ -817,11 +935,11 @@ pub async fn run(
                                 }
                             }
 
-                            let _ = draw_prompt(&input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                            let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
                         }
                     }
                     Event::Resize(_, _) => {
-                        let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                        let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
                     }
                     _ => {}
                 }
@@ -839,11 +957,15 @@ pub async fn run(
                                         } else {
                                             typing_users.remove(&sender);
                                         }
-                                        let _ = draw_prompt(&input_state, &server_name, &name, None, &typing_users);
+                                        let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
                                     }
                                 }
+                                ServerToClient::UsersList { users } => {
+                                    input_state.online_users = users;
+                                    let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                }
                                 _ => {
-                                    handle_incoming_message(msg, &input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(msg, &mut input_state, &server_name, &name, &typing_users);
                                 }
                             }
                         }

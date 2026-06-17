@@ -184,6 +184,12 @@ async fn handle_client(
     };
     let _ = state.tx.send(join_alert);
 
+    let active_users = {
+        let u = state.users.lock().await;
+        u.iter().cloned().collect::<Vec<String>>()
+    };
+    let _ = state.tx.send(ServerToClient::UsersList { users: active_users });
+
     let mut rx = state.tx.subscribe();
 
     loop {
@@ -254,6 +260,12 @@ async fn handle_client(
         timestamp: chrono::Utc::now(),
     };
     let _ = state.tx.send(leave_alert);
+
+    let active_users_after = {
+        let u = state.users.lock().await;
+        u.iter().cloned().collect::<Vec<String>>()
+    };
+    let _ = state.tx.send(ServerToClient::UsersList { users: active_users_after });
 
     Ok(())
 }

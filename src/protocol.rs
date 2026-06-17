@@ -29,4 +29,7 @@ pub enum ServerToClient {
     Error {
         message: String,
     },
+    UsersList {
+        users: Vec<String>,
+    },
 }
