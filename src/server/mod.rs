@@ -70,6 +70,7 @@ pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(),
         tx,
         users: tokio::sync::Mutex::new(HashSet::new()),
         debug,
+        history: tokio::sync::Mutex::new(std::collections::VecDeque::with_capacity(20)),
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
@@ -249,7 +250,16 @@ async fn handle_client(
                                     };
                                     let _ = state.tx.send(broadcast_msg);
 
-                                    let tx = state.tx.clone();
+                                    // Add the ask to history
+                                    {
+                                        let mut hist = state.history.lock().await;
+                                        if hist.len() >= 20 {
+                                            hist.pop_front();
+                                        }
+                                        hist.push_back(format!("{}: asked Ollama: \"{}\"", username, question));
+                                    }
+
+                                    let state_clone = state.clone();
                                     let user_log = username.clone();
                                     tokio::spawn(async move {
                                         let ollama_api = std::env::var("OLLAMA_API_URL")
@@ -272,6 +282,34 @@ async fn handle_client(
                                             Err(_) => "llama3".to_string(),
                                         };
 
+                                        let active_users_list = {
+                                            let u = state_clone.users.lock().await;
+                                            u.iter().cloned().collect::<Vec<String>>().join(", ")
+                                        };
+                                        let chat_history_text = {
+                                            let h = state_clone.history.lock().await;
+                                            h.iter().cloned().collect::<Vec<String>>().join("\n")
+                                        };
+
+                                        let system_prompt = format!(
+                                            "You are a helpful chat assistant named Ollama inside a terminal chatroom.\n\
+                                             Room context:\n\
+                                             - Server Name: {}\n\
+                                             - Current Online Users: [{}]\n\
+                                             - User asking you: {}\n\n\
+                                             Recent Chat History (for context):\n\
+                                             ---\n\
+                                             {}\n\
+                                             ---\n\n\
+                                             Instructions:\n\
+                                             - Keep your response brief, max 200 characters or words.\n\
+                                             - Do not output any <think> tags or internal thinking steps; respond directly and concisely.",
+                                            state_clone.server_name,
+                                            active_users_list,
+                                            user_log,
+                                            chat_history_text
+                                        );
+
                                         #[derive(serde::Serialize)]
                                         struct Message {
                                             role: String,
@@ -289,7 +327,7 @@ async fn handle_client(
                                             messages: vec![
                                                 Message {
                                                     role: "system".to_string(),
-                                                    content: "You are a helpful chat assistant inside a terminal chatroom. Keep your response brief, max 200 characters or words. Do not output any <think> tags or internal thinking steps; respond directly and concisely.".to_string(),
+                                                    content: system_prompt,
                                                 },
                                                 Message {
                                                     role: "user".to_string(),
@@ -321,13 +359,22 @@ async fn handle_client(
                                                     if let Some(choice) = chat_resp.choices.first() {
                                                         let reply = choice.message.content.trim();
                                                         server_log!(Info, "Ollama successfully answered to '{}' using model '{}'", user_log, model);
+                                                        
+                                                        {
+                                                            let mut hist = state_clone.history.lock().await;
+                                                            if hist.len() >= 20 {
+                                                                hist.pop_front();
+                                                            }
+                                                            hist.push_back(format!("🤖 Ollama: {}", reply));
+                                                        }
+
                                                         let response_content = format!("🤖 [Ollama ({})]:\n{}", model, reply);
                                                         let response_msg = ServerToClient::Broadcast {
                                                             sender: "🤖 Ollama".to_string(),
                                                             content: response_content,
                                                             timestamp: chrono::Utc::now(),
                                                         };
-                                                        let _ = tx.send(response_msg);
+                                                        let _ = state_clone.tx.send(response_msg);
                                                     } else {
                                                         server_log!(Warn, "Ollama query for '{}' returned empty choices using model '{}'", user_log, model);
                                                         let error_msg = ServerToClient::Broadcast {
@@ -335,7 +382,7 @@ async fn handle_client(
                                                             content: "Error: No completion choices returned from model.".to_string(),
                                                             timestamp: chrono::Utc::now(),
                                                         };
-                                                        let _ = tx.send(error_msg);
+                                                        let _ = state_clone.tx.send(error_msg);
                                                     }
                                                 } else {
                                                     server_log!(Error, "Ollama query for '{}' failed to parse response using model '{}'", user_log, model);
@@ -344,7 +391,7 @@ async fn handle_client(
                                                         content: "Error: Failed to parse response from Ollama API.".to_string(),
                                                         timestamp: chrono::Utc::now(),
                                                     };
-                                                    let _ = tx.send(error_msg);
+                                                    let _ = state_clone.tx.send(error_msg);
                                                 }
                                             }
                                             Err(e) => {
@@ -354,12 +401,21 @@ async fn handle_client(
                                                     content: format!("Error: Failed to connect to Ollama: {}", e),
                                                     timestamp: chrono::Utc::now(),
                                                 };
-                                                let _ = tx.send(error_msg);
+                                                let _ = state_clone.tx.send(error_msg);
                                             }
                                         }
                                     });
                                 }
                                 continue;
+                            }
+
+                            // Add regular message to history
+                            {
+                                let mut hist = state.history.lock().await;
+                                if hist.len() >= 20 {
+                                    hist.pop_front();
+                                }
+                                hist.push_back(format!("{}: {}", username, content));
                             }
 
                             server_log!(Info, "User '{}' sent chat message: '{}'", username, content);
@@ -379,6 +435,12 @@ async fn handle_client(
                                 is_typing,
                             };
                             let _ = state.tx.send(broadcast_msg);
+                        }
+                        ClientToServer::Ping => {
+                            let pong = ServerToClient::Pong;
+                            if let Ok(json) = serde_json::to_string(&pong) {
+                                let _ = framed.send(json).await;
+                            }
                         }
                         _ => {}
                     }

@@ -1,5 +1,5 @@
 use crate::protocol::ServerToClient;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use tokio::sync::{Mutex, broadcast};
 
 pub struct ServerState {
@@ -8,4 +8,5 @@ pub struct ServerState {
     pub tx: broadcast::Sender<ServerToClient>,
     pub users: Mutex<HashSet<String>>,
     pub debug: bool,
+    pub history: Mutex<VecDeque<String>>,
 }

@@ -215,6 +215,42 @@ impl InputState {
             KeyCode::Right => {
                 if self.cursor_index < self.buffer.len() {
                     self.cursor_index += 1;
+                } else {
+                    let input_str: String = self.buffer.iter().collect();
+                    if !input_str.is_empty() {
+                        if input_str.starts_with('/') {
+                            if input_str.starts_with("/theme ") {
+                                let query = &input_str[7..];
+                                if !query.is_empty() {
+                                    if let Some(matched_theme) = THEME_NAMES.iter().find(|t| t.starts_with(query)) {
+                                        let suffix = &matched_theme[query.len()..];
+                                        self.buffer.extend(suffix.chars());
+                                        self.cursor_index = self.buffer.len();
+                                    }
+                                }
+                            } else {
+                                if let Some(matched_cmd) = COMMANDS.iter().find(|c| c.starts_with(&input_str)) {
+                                    let suffix = &matched_cmd[input_str.len()..];
+                                    self.buffer.extend(suffix.chars());
+                                    self.cursor_index = self.buffer.len();
+                                }
+                            }
+                        } else {
+                            let before_cursor = &self.buffer[..self.cursor_index];
+                            let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
+                            let word: String = before_cursor[word_start..].iter().collect();
+                            if word.starts_with('@') {
+                                let query = &word[1..].to_lowercase();
+                                if !query.is_empty() {
+                                    if let Some(matched_user) = self.online_users.iter().find(|u| u.to_lowercase().starts_with(query)) {
+                                        let suffix = &matched_user[query.len()..];
+                                        self.buffer.extend(suffix.chars());
+                                        self.cursor_index = self.buffer.len();
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 None
             }
@@ -469,8 +505,8 @@ fn highlight_mentions(content: &str, own_username: &str, online_users: &[String]
     let own_lower = own_username.to_lowercase();
 
     for token in content.split(' ') {
-        if let Some(at_idx) = token.find('@') {
-            let chars: Vec<char> = token.chars().collect();
+        let chars: Vec<char> = token.chars().collect();
+        if let Some(at_idx) = chars.iter().position(|&c| c == '@') {
             if at_idx + 1 < chars.len() && chars[at_idx + 1].is_alphanumeric() {
                 let leading_ok = chars[..at_idx].iter().all(|&c| !c.is_alphanumeric() && c != '@');
                 if leading_ok {
@@ -500,9 +536,9 @@ fn highlight_mentions(content: &str, own_username: &str, online_users: &[String]
                         if username_part_lower == own_lower {
                             has_self_mention = true;
                             let formatted_mention = format!("@{}", username_part)
-                                .truecolor(0, 0, 0)
-                                .on_truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                                .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
                                 .bold()
+                                .underline()
                                 .to_string();
                             words.push(format!("{}{}{}", leading_part, formatted_mention, punctuation_part));
                             continue;
@@ -561,6 +597,41 @@ fn draw_prompt(state: &InputState) -> Result<(), io::Error> {
     let prompt_sym = "> ".truecolor(colors.prompt.0, colors.prompt.1, colors.prompt.2).bold();
     let (visible_buffer, visible_cursor) = get_visible_prompt_and_cursor(&state.buffer, state.cursor_index, width);
     print!("{}{}", prompt_sym, visible_buffer);
+
+    let mut suggestion_suffix = String::new();
+    let input_str: String = state.buffer.iter().collect();
+    if !input_str.is_empty() && state.cursor_index == state.buffer.len() {
+        if input_str.starts_with('/') {
+            if input_str.starts_with("/theme ") {
+                let query = &input_str[7..];
+                if !query.is_empty() {
+                    if let Some(matched_theme) = THEME_NAMES.iter().find(|t| t.starts_with(query)) {
+                        suggestion_suffix = matched_theme[query.len()..].to_string();
+                    }
+                }
+            } else {
+                if let Some(matched_cmd) = COMMANDS.iter().find(|c| c.starts_with(&input_str)) {
+                    suggestion_suffix = matched_cmd[input_str.len()..].to_string();
+                }
+            }
+        } else {
+            let before_cursor = &state.buffer[..state.cursor_index];
+            let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
+            let word: String = before_cursor[word_start..].iter().collect();
+            if word.starts_with('@') {
+                let query = &word[1..].to_lowercase();
+                if !query.is_empty() {
+                    if let Some(matched_user) = state.online_users.iter().find(|u| u.to_lowercase().starts_with(query)) {
+                        suggestion_suffix = matched_user[query.len()..].to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    if !suggestion_suffix.is_empty() {
+        print!("{}", suggestion_suffix.dimmed());
+    }
 
     execute!(stdout, cursor::MoveToColumn((2 + visible_cursor) as u16))?;
     stdout.flush()?;
@@ -654,8 +725,22 @@ pub async fn run(
     let _raw_guard = RawModeGuard::new();
     draw_prompt(&input_state)?;
 
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.tick().await;
+
     loop {
         tokio::select! {
+            _ = ping_interval.tick() => {
+                let ping = ClientToServer::Ping;
+                if let Ok(json) = serde_json::to_string(&ping) {
+                    if framed.send(json).await.is_err() {
+                        let _ = terminal::disable_raw_mode();
+                        eprintln!("\r\n{} Lost connection to server.", "✖".red().bold());
+                        break;
+                    }
+                }
+            }
+
             Some(json) = outbound_rx.recv() => {
                 if framed.send(json).await.is_err() {
                     let _ = terminal::disable_raw_mode();
@@ -790,6 +875,9 @@ pub async fn run(
                                 handle_incoming_message(debug_alert, &mut input_state, &name);
                             }
                             match msg {
+                                ServerToClient::Pong => {
+                                    // Ignore heartbeat responses
+                                }
                                 ServerToClient::UserTyping { .. } => {
                                     // Ignore typing indicators
                                 }

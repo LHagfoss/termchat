@@ -6,6 +6,7 @@ pub enum ClientToServer {
     Handshake { name: String, token: String },
     ChatMessage { content: String },
     Typing { is_typing: bool },
+    Ping,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -32,4 +33,5 @@ pub enum ServerToClient {
     UsersList {
         users: Vec<String>,
     },
+    Pong,
 }
