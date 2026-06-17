@@ -159,6 +159,10 @@ impl InputState {
     }
 
     fn handle_key(&mut self, key_event: event::KeyEvent) -> Option<String> {
+        if key_event.kind == event::KeyEventKind::Release {
+            return None;
+        }
+
         if key_event.code != KeyCode::Tab {
             self.tab_index = None;
             self.tab_matches.clear();
@@ -629,6 +633,9 @@ pub async fn run(
             Some(evt) = key_rx.recv() => {
                 match evt {
                     Event::Key(key_event) => {
+                        if key_event.kind == event::KeyEventKind::Release {
+                            continue;
+                        }
                         let prev_lines_above = get_lines_above_input(&input_state);
 
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
