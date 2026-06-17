@@ -14,14 +14,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_config = config::load_or_create_config();
 
     match cli.command {
-        cli::Commands::Start { name, ip, port, debug } => {
+        cli::Commands::Start {
+            name,
+            ip,
+            port,
+            debug,
+        } => {
             let server_name = match name {
                 Some(n) => n,
                 None => {
-                    print!(
-                        "   {} Enter server name: ",
-                        "Input".bright_white().bold()
-                    );
+                    print!("   {} Enter server name: ", "Input".bright_white().bold());
                     io::stdout().flush().unwrap();
 
                     let mut input = String::new();
@@ -39,10 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server::run(server_name, ip, port, debug).await?;
         }
         cli::Commands::Join { ip, port, name } => {
-            print!(
-                "   {} Enter server token: ",
-                "Input".bright_white().bold()
-            );
+            print!("   {} Enter server token: ", "Input".bright_white().bold());
             io::stdout().flush().unwrap();
 
             let mut token = String::new();
