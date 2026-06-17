@@ -12,16 +12,14 @@ use crossterm::{
 
 use crate::protocol::{ClientToServer, ServerToClient};
 
-const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme", "/debug"];
+const COMMANDS: &[&str] = &["/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme", "/debug", "/ask"];
 const THEME_NAMES: &[&str] = &["blurple", "matrix", "cyberpunk", "sunset", "lagos", "mint", "lavender"];
 
 #[derive(Clone, Copy, Debug)]
 struct ThemeColors {
     pub title: (u8, u8, u8),
-    pub line: (u8, u8, u8),
     pub prompt: (u8, u8, u8),
     pub accent: (u8, u8, u8),
-    pub status: (u8, u8, u8),
 }
 
 impl ThemeColors {
@@ -29,53 +27,39 @@ impl ThemeColors {
         match theme_name.to_lowercase().as_str() {
             "lagos" => Self {
                 title: (236, 110, 93),   // Cozy Coral
-                line: (60, 88, 101),     // Slate Blue
                 prompt: (236, 110, 93),  // Coral
                 accent: (236, 110, 93),  // Coral
-                status: (139, 155, 158), // Muted Grey-Blue
             },
             "mint" => Self {
                 title: (140, 216, 167),  // Soft Mint
-                line: (78, 135, 140),    // Muted Teal
                 prompt: (140, 216, 167), // Soft Mint
                 accent: (140, 216, 167), // Soft Mint
-                status: (181, 184, 177), // Soft Gray
             },
             "lavender" => Self {
                 title: (193, 158, 214),  // Soft Lavender
-                line: (133, 112, 157),   // Dusty Purple
                 prompt: (193, 158, 214), // Soft Lavender
                 accent: (193, 158, 214), // Soft Lavender
-                status: (210, 180, 188), // Muted Rose
             },
             "matrix" => Self {
                 title: (0, 255, 100),
-                line: (0, 120, 50),
                 prompt: (0, 255, 100),
                 accent: (100, 255, 150),
-                status: (0, 180, 80),
             },
             "cyberpunk" => Self {
                 title: (255, 0, 127),
-                line: (0, 240, 255),
                 prompt: (255, 0, 127),
                 accent: (255, 200, 0),
-                status: (0, 200, 220),
             },
             "sunset" => Self {
                 title: (255, 90, 90),
-                line: (180, 80, 250),
                 prompt: (255, 180, 0),
                 accent: (180, 80, 250),
-                status: (255, 120, 180),
             },
             // "blurple" (default)
             _ => Self {
                 title: (114, 137, 218),  // Blurple!
-                line: (92, 163, 128),    // Muted Mint
                 prompt: (114, 137, 218), // Blurple
                 accent: (114, 137, 218), // Blurple
-                status: (146, 154, 171), // Slate Gray
             },
         }
     }
@@ -127,6 +111,19 @@ impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
     }
+}
+
+fn is_fuzzy_match(query: &str, target: &str) -> bool {
+    let query_lower = query.to_lowercase();
+    let target_lower = target.to_lowercase();
+    let mut target_chars = target_lower.chars();
+    for q_char in query_lower.chars() {
+        match target_chars.position(|t_char| t_char == q_char) {
+            Some(_) => {}
+            None => return false,
+        }
+    }
+    true
 }
 
 struct InputState {
@@ -276,7 +273,7 @@ impl InputState {
                         self.tab_word_start = Some(7);
                         let query = &input_str[7..];
                         let matches: Vec<String> = THEME_NAMES.iter()
-                            .filter(|t| t.starts_with(query))
+                            .filter(|t| is_fuzzy_match(query, t))
                             .map(|t| format!("/theme {}", t))
                             .collect();
                         if !matches.is_empty() {
@@ -291,13 +288,13 @@ impl InputState {
                         let word: String = before_cursor[word_start..].iter().collect();
 
                         if word.starts_with('@') {
-                            let query = &word[1..].to_lowercase();
+                            let query = &word[1..];
                             self.pre_tab_buffer = self.buffer.clone();
                             self.pre_tab_cursor = current_cursor;
                             self.tab_word_start = Some(word_start);
 
                             let matches: Vec<String> = self.online_users.iter()
-                                .filter(|u| u.to_lowercase().starts_with(query))
+                                .filter(|u| is_fuzzy_match(query, u))
                                 .map(|u| format!("@{}", u))
                                 .collect();
 
@@ -317,7 +314,7 @@ impl InputState {
                             self.tab_word_start = Some(word_start);
 
                             let matches: Vec<String> = COMMANDS.iter()
-                                .filter(|cmd| cmd.starts_with(&word))
+                                .filter(|cmd| is_fuzzy_match(&word, cmd))
                                 .map(|s| s.to_string())
                                 .collect();
 
@@ -438,6 +435,7 @@ fn print_help(colors: ThemeColors) {
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/refresh", "Clear screen & show welcome banner");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/info", "Show connection info");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/debug", "Toggle local debug mode");
+    print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/ask <query>", "Ask local Ollama AI");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/exit", "Exit the chat client");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "/theme <name>", "Change color theme");
     print!("   {}  {:<12} {} \r\n", "•".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), "Ctrl+C", "Exit the chat client");
@@ -454,104 +452,6 @@ fn print_info(ip: &str, port: u16, name: &str, server_name: &str, token: &str, t
     print!("   {:<10} {}\r\n", "Token:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), token);
     print!("   {:<10} {}\r\n", "Theme:".truecolor(colors.accent.0, colors.accent.1, colors.accent.2), theme);
     print!("{}\r\n", "  ─────────────────────".truecolor(colors.title.0, colors.title.1, colors.title.2).bold());
-}
-
-fn is_showing_suggestions(state: &InputState) -> bool {
-    let input_str: String = state.buffer.iter().collect();
-    if input_str.starts_with("/theme ") {
-        let query = &input_str[7..];
-        let matches_count = THEME_NAMES.iter()
-            .filter(|t| t.starts_with(query) && format!("/theme {}", t) != input_str)
-            .count();
-        matches_count > 0
-    } else if input_str.starts_with('/') && !input_str.is_empty() {
-        let matches_count = COMMANDS.iter()
-            .filter(|cmd| cmd.starts_with(&input_str) && **cmd != input_str)
-            .count();
-        matches_count > 0
-    } else {
-        let current_cursor = state.cursor_index;
-        let before_cursor = &state.buffer[..current_cursor];
-        let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
-        let word: String = before_cursor[word_start..].iter().collect();
-        if word.starts_with('@') {
-            let query = &word[1..].to_lowercase();
-            let matches_count = state.online_users.iter()
-                .filter(|u| u.to_lowercase().starts_with(query) && format!("@{}", u.to_lowercase()) != word.to_lowercase())
-                .count();
-            matches_count > 0
-        } else {
-            false
-        }
-    }
-}
-
-fn print_suggestions(state: &InputState, colors: ThemeColors) {
-    let input_str: String = state.buffer.iter().collect();
-    let matches: Vec<String> = if input_str.starts_with("/theme ") {
-        let query = &input_str[7..];
-        THEME_NAMES.iter()
-            .filter(|t| t.starts_with(query))
-            .map(|t| format!("/theme {}", t))
-            .collect()
-    } else if input_str.starts_with('/') {
-        COMMANDS.iter()
-            .filter(|cmd| cmd.starts_with(&input_str))
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        let current_cursor = state.cursor_index;
-        let before_cursor = &state.buffer[..current_cursor];
-        let word_start = before_cursor.iter().rposition(|&c| c == ' ').map_or(0, |pos| pos + 1);
-        let word: String = before_cursor[word_start..].iter().collect();
-        let query = &word[1..].to_lowercase();
-        state.online_users.iter()
-            .filter(|u| u.to_lowercase().starts_with(query))
-            .map(|u| format!("@{}", u))
-            .collect()
-    };
-
-    print!("  {}", "Suggestions:".truecolor(colors.status.0, colors.status.1, colors.status.2));
-    for (i, m) in matches.iter().enumerate() {
-        let is_selected = state.tab_index.map_or(false, |idx| state.tab_matches.get(idx) == Some(m));
-        if is_selected {
-            print!(" {}", m.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold().underline());
-        } else {
-            print!(" {}", m.truecolor(colors.title.0, colors.title.1, colors.title.2));
-        }
-        if i + 1 < matches.len() {
-            print!(",");
-        }
-    }
-    print!(" {}\r\n", "(Tab to autocomplete, Esc to close)".truecolor(80, 95, 100).italic());
-}
-
-fn get_lines_above_input(state: &InputState) -> u16 {
-    let mut lines = 1;
-    if state.show_help {
-        lines += 13; // help prints 13 lines now
-    }
-    if is_showing_suggestions(state) {
-        lines += 1;
-    }
-    lines
-}
-
-fn format_typing_indicator(typing_users: &std::collections::HashSet<String>) -> Option<String> {
-    if typing_users.is_empty() {
-        None
-    } else {
-        let mut list: Vec<String> = typing_users.iter().cloned().collect();
-        list.sort();
-        let display = if list.len() == 1 {
-            format!("{} is typing...", list[0])
-        } else if list.len() == 2 {
-            format!("{} and {} are typing...", list[0], list[1])
-        } else {
-            "Several people are typing...".to_string()
-        };
-        Some(display)
-    }
 }
 
 fn clear_screen() {
@@ -631,94 +531,38 @@ fn print_message(message: &ServerToClient, own_username: &str, online_users: &[S
             let display_name = format_username(sender);
             let colored_name = get_colored_name(&display_name);
             let (highlighted_content, has_self_mention) = highlight_mentions(content, own_username, online_users, colors);
-            print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, highlighted_content);
+            let normalized = highlighted_content.replace("\r\n", "\n").replace("\n", "\r\n");
+            print!(" {} {}: {}\r\n", local_time.to_string().dimmed(), colored_name, normalized);
             if has_self_mention {
                 print!("\x07"); // trigger terminal beep
                 let _ = io::stdout().flush();
             }
         }
         ServerToClient::SystemAlert { content, .. } => {
-            print!(" {} {}\r\n", "✦".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(), content.dimmed());
+            let normalized = content.replace("\r\n", "\n").replace("\n", "\r\n");
+            print!(" {} {}\r\n", "✦".truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(), normalized.dimmed());
         }
         ServerToClient::Error { message } => {
-            print!(" {} {}\r\n", "✖".red().bold(), message.red());
+            let normalized = message.replace("\r\n", "\n").replace("\n", "\r\n");
+            print!(" {} {}\r\n", "✖".red().bold(), normalized.red());
         }
         _ => {}
     }
 }
 
-fn draw_prompt(
-    state: &mut InputState,
-    server_name: &str,
-    username: &str,
-    prev_lines_above: Option<u16>,
-    typing_users: &std::collections::HashSet<String>,
-) -> Result<(), io::Error> {
+fn draw_prompt(state: &InputState) -> Result<(), io::Error> {
     let colors = ThemeColors::get(&state.theme_name);
     let mut stdout = io::stdout();
     let (width, _) = terminal::size().unwrap_or((80, 24));
     let width = width as usize;
 
-    // 1. Position cursor to the start of the previous drawing block
-    execute!(stdout, cursor::MoveToColumn(0))?;
-    if let Some(up) = prev_lines_above {
-        if up > 0 {
-            execute!(stdout, cursor::MoveUp(up))?;
-        }
-    }
+    execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::CurrentLine))?;
 
-    // 2. Clear from cursor down (completely wipes the old prompt block)
-    execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
-
-    // Draw help if active
-    if state.show_help {
-        print_help(colors);
-    }
-
-    // Draw suggestions if active
-    if is_showing_suggestions(state) {
-        print_suggestions(state, colors);
-    }
-
-    // Draw separator 1
-    let sep_char = "─".repeat(width);
-    let sep_color = sep_char.truecolor(colors.line.0, colors.line.1, colors.line.2);
-    print!("{}", sep_color);
-    execute!(stdout, cursor::MoveToNextLine(1))?;
-
-    // Get visible input based on terminal width
-    let (visible_buffer, visible_cursor) = get_visible_prompt_and_cursor(&state.buffer, state.cursor_index, width);
-
-    // Draw input line
     let prompt_sym = "> ".truecolor(colors.prompt.0, colors.prompt.1, colors.prompt.2).bold();
+    let (visible_buffer, visible_cursor) = get_visible_prompt_and_cursor(&state.buffer, state.cursor_index, width);
     print!("{}{}", prompt_sym, visible_buffer);
-    execute!(stdout, cursor::MoveToNextLine(1))?;
 
-    // Draw separator 2
-    print!("{}", sep_color);
-    execute!(stdout, cursor::MoveToNextLine(1))?;
-
-    // Draw status bar
-    let mut left_text_raw = " ? for shortcuts ".to_string();
-    if let Some(indicator) = format_typing_indicator(typing_users) {
-        left_text_raw.push_str(&format!("• {} ", indicator));
-    }
-    let left_text = left_text_raw.truecolor(colors.status.0, colors.status.1, colors.status.2);
-    let right_text = format!(" {} • {} ", username, server_name).truecolor(colors.status.0, colors.status.1, colors.status.2);
-    
-    let left_len = left_text_raw.chars().count();
-    let right_len = username.chars().count() + server_name.chars().count() + 6;
-    let spaces_count = width.saturating_sub(left_len + right_len + 1);
-    let spaces = " ".repeat(spaces_count);
-
-    print!("{}{}{}", left_text, spaces, right_text);
-
-    // Position cursor back to the input line
-    execute!(
-        stdout,
-        cursor::MoveUp(2),
-        cursor::MoveToColumn((2 + visible_cursor) as u16)
-    )?;
+    execute!(stdout, cursor::MoveToColumn((2 + visible_cursor) as u16))?;
     stdout.flush()?;
 
     Ok(())
@@ -727,24 +571,17 @@ fn draw_prompt(
 fn handle_incoming_message(
     msg: ServerToClient,
     input_state: &mut InputState,
-    server_name: &str,
     username: &str,
-    typing_users: &std::collections::HashSet<String>,
 ) {
     let colors = ThemeColors::get(&input_state.theme_name);
     let mut stdout = io::stdout();
-    let prev_lines_above = get_lines_above_input(input_state);
     
-    // Clear the old prompt area entirely
-    let _ = execute!(stdout, cursor::MoveToColumn(0));
-    if prev_lines_above > 0 {
-        let _ = execute!(stdout, cursor::MoveUp(prev_lines_above));
-    }
-    let _ = execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown));
+    // Clear the current input line
+    let _ = execute!(stdout, cursor::MoveToColumn(0), terminal::Clear(terminal::ClearType::CurrentLine));
 
     print_message(&msg, username, &input_state.online_users, colors);
 
-    let _ = draw_prompt(input_state, server_name, username, None, typing_users);
+    let _ = draw_prompt(input_state);
 }
 
 pub async fn run(
@@ -798,8 +635,6 @@ pub async fn run(
     print_welcome_banner(&server_name, &name, colors);
 
     let mut input_state = InputState::new(theme_name);
-    let mut typing_users = std::collections::HashSet::<String>::new();
-    let mut client_is_typing = false;
 
     let (key_tx, mut key_rx) = tokio::sync::mpsc::channel::<Event>(100);
     std::thread::spawn(move || {
@@ -815,11 +650,20 @@ pub async fn run(
         }
     });
 
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel::<String>(100);
     let _raw_guard = RawModeGuard::new();
-    draw_prompt(&mut input_state, &server_name, &name, None, &typing_users)?;
+    draw_prompt(&input_state)?;
 
     loop {
         tokio::select! {
+            Some(json) = outbound_rx.recv() => {
+                if framed.send(json).await.is_err() {
+                    let _ = terminal::disable_raw_mode();
+                    eprintln!("\r\n{} Lost connection to server.", "✖".red().bold());
+                    break;
+                }
+            }
+
             Some(evt) = key_rx.recv() => {
                 match evt {
                     Event::Key(key_event) => {
@@ -827,40 +671,36 @@ pub async fn run(
                             continue;
                         }
                         
-                        let prev_lines_above = get_lines_above_input(&input_state);
-
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
-                            input_state.show_help = true;
-                            let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                            clear_screen();
+                            let current_colors = ThemeColors::get(&input_state.theme_name);
+                            print_help(current_colors);
+                            let _ = draw_prompt(&input_state);
                             continue;
                         }
 
                         if let Some(cmd) = input_state.handle_key(key_event) {
-                            // Reset typing status on submit
-                            if client_is_typing {
-                                client_is_typing = false;
-                                let stop_typing = ClientToServer::Typing { is_typing: false };
-                                if let Ok(json) = serde_json::to_string(&stop_typing) {
-                                    let _ = framed.send(json).await;
-                                }
-                            }
-
                             if cmd == "/exit" {
                                 let _ = terminal::disable_raw_mode();
                                 println!("\r\nDisconnecting from chat...");
                                 break;
                             } else if cmd == "/clear" {
                                 clear_screen();
-                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&input_state);
                             } else if cmd == "/refresh" {
                                 clear_screen();
                                 let current_colors = ThemeColors::get(&input_state.theme_name);
                                 print_welcome_banner(&server_name, &name, current_colors);
-                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&input_state);
+                            } else if cmd == "/help" {
+                                clear_screen();
+                                let current_colors = ThemeColors::get(&input_state.theme_name);
+                                print_help(current_colors);
+                                let _ = draw_prompt(&input_state);
                             } else if cmd == "/info" {
                                 let info_colors = ThemeColors::get(&input_state.theme_name);
                                 print_info(&ip, port, &name, &server_name, &token, &input_state.theme_name, info_colors);
-                                let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                                let _ = draw_prompt(&input_state);
                             } else if cmd == "/debug" {
                                 input_state.debug = !input_state.debug;
                                 let status = if input_state.debug { "enabled" } else { "disabled" };
@@ -868,7 +708,7 @@ pub async fn run(
                                     content: format!("Local client debugging {}", status),
                                     timestamp: chrono::Utc::now(),
                                 };
-                                handle_incoming_message(debug_msg, &mut input_state, &server_name, &name, &typing_users);
+                                handle_incoming_message(debug_msg, &mut input_state, &name);
                             } else if cmd.starts_with("/theme ") {
                                 let target_theme = cmd[7..].trim().to_lowercase();
                                 if THEME_NAMES.contains(&target_theme.as_str()) {
@@ -879,13 +719,40 @@ pub async fn run(
                                         content: format!("Theme changed to '{}' successfully!", target_theme),
                                         timestamp: chrono::Utc::now(),
                                     };
-                                    handle_incoming_message(info_msg, &mut input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(info_msg, &mut input_state, &name);
                                 } else {
                                     let error_msg = ServerToClient::Error {
                                         message: format!("Unknown theme '{}'. Options: blurple, matrix, cyberpunk, sunset", target_theme),
                                     };
-                                    handle_incoming_message(error_msg, &mut input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(error_msg, &mut input_state, &name);
                                 }
+                            } else if cmd.starts_with("/ask ") || cmd == "/ask" {
+                                let question = if cmd == "/ask" {
+                                    "".to_string()
+                                } else {
+                                    cmd[5..].trim().to_string()
+                                };
+
+                                if question.is_empty() {
+                                    let error_msg = ServerToClient::SystemAlert {
+                                        content: "Usage: /ask <your question>".to_string(),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(error_msg, &mut input_state, &name);
+                                } else {
+                                    let chat_msg = ClientToServer::ChatMessage { content: cmd };
+                                    if input_state.debug {
+                                        let debug_alert = ServerToClient::SystemAlert {
+                                            content: format!("[DEBUG] Sent: {:?}", chat_msg),
+                                            timestamp: chrono::Utc::now(),
+                                        };
+                                        handle_incoming_message(debug_alert, &mut input_state, &name);
+                                    }
+                                    if let Ok(json) = serde_json::to_string(&chat_msg) {
+                                        let _ = outbound_tx.send(json).await;
+                                    }
+                                }
+                                let _ = draw_prompt(&input_state);
                             } else {
                                 let chat_msg = ClientToServer::ChatMessage { content: cmd };
                                 if input_state.debug {
@@ -893,53 +760,19 @@ pub async fn run(
                                         content: format!("[DEBUG] Sent: {:?}", chat_msg),
                                         timestamp: chrono::Utc::now(),
                                     };
-                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(debug_alert, &mut input_state, &name);
                                 }
                                 if let Ok(json) = serde_json::to_string(&chat_msg) {
-                                    if framed.send(json).await.is_err() {
-                                        let _ = terminal::disable_raw_mode();
-                                        eprintln!("\r\n{} Lost connection to server.", "✖".red().bold());
-                                        break;
-                                    }
+                                    let _ = outbound_tx.send(json).await;
                                 }
-                                let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                                let _ = draw_prompt(&input_state);
                             }
                         } else {
-                            // Check typing state changes
-                            let currently_empty = input_state.buffer.is_empty();
-                            if !currently_empty && !client_is_typing {
-                                client_is_typing = true;
-                                let start_typing = ClientToServer::Typing { is_typing: true };
-                                if input_state.debug {
-                                    let debug_alert = ServerToClient::SystemAlert {
-                                        content: format!("[DEBUG] Sent: {:?}", start_typing),
-                                        timestamp: chrono::Utc::now(),
-                                    };
-                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
-                                }
-                                if let Ok(json) = serde_json::to_string(&start_typing) {
-                                    let _ = framed.send(json).await;
-                                }
-                            } else if currently_empty && client_is_typing {
-                                client_is_typing = false;
-                                let stop_typing = ClientToServer::Typing { is_typing: false };
-                                if input_state.debug {
-                                    let debug_alert = ServerToClient::SystemAlert {
-                                        content: format!("[DEBUG] Sent: {:?}", stop_typing),
-                                        timestamp: chrono::Utc::now(),
-                                    };
-                                    handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
-                                }
-                                if let Ok(json) = serde_json::to_string(&stop_typing) {
-                                    let _ = framed.send(json).await;
-                                }
-                            }
-
-                            let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                            let _ = draw_prompt(&input_state);
                         }
                     }
                     Event::Resize(_, _) => {
-                        let _ = draw_prompt(&mut input_state, &server_name, &name, None, &typing_users);
+                        let _ = draw_prompt(&input_state);
                     }
                     _ => {}
                 }
@@ -954,27 +787,18 @@ pub async fn run(
                                     content: format!("[DEBUG] Received: {:?}", msg),
                                     timestamp: chrono::Utc::now(),
                                 };
-                                handle_incoming_message(debug_alert, &mut input_state, &server_name, &name, &typing_users);
+                                handle_incoming_message(debug_alert, &mut input_state, &name);
                             }
                             match msg {
-                                ServerToClient::UserTyping { sender, is_typing } => {
-                                    if sender != name {
-                                        if is_typing {
-                                            typing_users.insert(sender);
-                                        } else {
-                                            typing_users.remove(&sender);
-                                        }
-                                        let prev_lines_above = get_lines_above_input(&input_state);
-                                        let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
-                                    }
+                                ServerToClient::UserTyping { .. } => {
+                                    // Ignore typing indicators
                                 }
                                 ServerToClient::UsersList { users } => {
                                     input_state.online_users = users;
-                                    let prev_lines_above = get_lines_above_input(&input_state);
-                                    let _ = draw_prompt(&mut input_state, &server_name, &name, Some(prev_lines_above), &typing_users);
+                                    let _ = draw_prompt(&input_state);
                                 }
                                 _ => {
-                                    handle_incoming_message(msg, &mut input_state, &server_name, &name, &typing_users);
+                                    handle_incoming_message(msg, &mut input_state, &name);
                                 }
                             }
                         }

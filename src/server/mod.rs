@@ -208,6 +208,7 @@ async fn handle_client(
                     match client_msg {
                         ClientToServer::ChatMessage { content } => {
                             if content.trim() == "/users" {
+                                server_log!(Info, "User '{}' ran command '/users'", username);
                                 let active_users = state.users.lock().await;
                                 let user_list = active_users.iter().cloned().collect::<Vec<_>>().join(", ");
 
@@ -222,6 +223,146 @@ async fn handle_client(
                                 continue;
                             }
 
+                            if content.starts_with("/ask ") || content.trim() == "/ask" {
+                                let question = if content.trim() == "/ask" {
+                                    "".to_string()
+                                } else {
+                                    content[5..].trim().to_string()
+                                };
+
+                                if question.is_empty() {
+                                    server_log!(Info, "User '{}' ran command '/ask' with empty question", username);
+                                    let alert = ServerToClient::SystemAlert {
+                                        content: "Usage: /ask <your question>".to_string(),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&alert) {
+                                        let _ = framed.send(json).await;
+                                    }
+                                } else {
+                                    server_log!(Info, "User '{}' ran command '/ask' with question: '{}'", username, question);
+                                    let ask_display = format!("asked Ollama: \"{}\"", question);
+                                    let broadcast_msg = ServerToClient::Broadcast {
+                                        sender: username.clone(),
+                                        content: ask_display,
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    let _ = state.tx.send(broadcast_msg);
+
+                                    let tx = state.tx.clone();
+                                    let user_log = username.clone();
+                                    tokio::spawn(async move {
+                                        let ollama_api = std::env::var("OLLAMA_API_URL")
+                                            .unwrap_or_else(|_| "http://192.168.1.254:11434/v1".to_string());
+                                        let client = reqwest::Client::new();
+                                        
+                                        let models_url = format!("{}/models", ollama_api.trim_end_matches('/'));
+                                        let model = match client.get(&models_url).send().await {
+                                            Ok(resp) => {
+                                                #[derive(serde::Deserialize)]
+                                                struct ModelData { id: String }
+                                                #[derive(serde::Deserialize)]
+                                                struct ModelsResponse { data: Vec<ModelData> }
+                                                if let Ok(models) = resp.json::<ModelsResponse>().await {
+                                                    models.data.first().map(|m| m.id.clone()).unwrap_or_else(|| "llama3".to_string())
+                                                } else {
+                                                    "llama3".to_string()
+                                                }
+                                            }
+                                            Err(_) => "llama3".to_string(),
+                                        };
+
+                                        #[derive(serde::Serialize)]
+                                        struct Message {
+                                            role: String,
+                                            content: String,
+                                        }
+                                        #[derive(serde::Serialize)]
+                                        struct ChatRequest {
+                                            model: String,
+                                            messages: Vec<Message>,
+                                        }
+
+                                        let completions_url = format!("{}/chat/completions", ollama_api.trim_end_matches('/'));
+                                        let req_body = ChatRequest {
+                                            model: model.clone(),
+                                            messages: vec![
+                                                Message {
+                                                    role: "system".to_string(),
+                                                    content: "You are a helpful chat assistant inside a terminal chatroom. Keep your response brief, max 200 characters or words. Do not output any <think> tags or internal thinking steps; respond directly and concisely.".to_string(),
+                                                },
+                                                Message {
+                                                    role: "user".to_string(),
+                                                    content: question,
+                                                }
+                                            ],
+                                        };
+
+                                        match client.post(&completions_url)
+                                            .json(&req_body)
+                                            .send()
+                                            .await 
+                                        {
+                                            Ok(resp) => {
+                                                #[derive(serde::Deserialize)]
+                                                struct ChatChoice {
+                                                    message: MessageContent,
+                                                }
+                                                #[derive(serde::Deserialize)]
+                                                struct MessageContent {
+                                                    content: String,
+                                                }
+                                                #[derive(serde::Deserialize)]
+                                                struct ChatResponse {
+                                                    choices: Vec<ChatChoice>,
+                                                }
+
+                                                if let Ok(chat_resp) = resp.json::<ChatResponse>().await {
+                                                    if let Some(choice) = chat_resp.choices.first() {
+                                                        let reply = choice.message.content.trim();
+                                                        server_log!(Info, "Ollama successfully answered to '{}' using model '{}'", user_log, model);
+                                                        let response_content = format!("🤖 [Ollama ({})]:\n{}", model, reply);
+                                                        let response_msg = ServerToClient::Broadcast {
+                                                            sender: "🤖 Ollama".to_string(),
+                                                            content: response_content,
+                                                            timestamp: chrono::Utc::now(),
+                                                        };
+                                                        let _ = tx.send(response_msg);
+                                                    } else {
+                                                        server_log!(Warn, "Ollama query for '{}' returned empty choices using model '{}'", user_log, model);
+                                                        let error_msg = ServerToClient::Broadcast {
+                                                            sender: "🤖 Ollama".to_string(),
+                                                            content: "Error: No completion choices returned from model.".to_string(),
+                                                            timestamp: chrono::Utc::now(),
+                                                        };
+                                                        let _ = tx.send(error_msg);
+                                                    }
+                                                } else {
+                                                    server_log!(Error, "Ollama query for '{}' failed to parse response using model '{}'", user_log, model);
+                                                    let error_msg = ServerToClient::Broadcast {
+                                                        sender: "🤖 Ollama".to_string(),
+                                                        content: "Error: Failed to parse response from Ollama API.".to_string(),
+                                                        timestamp: chrono::Utc::now(),
+                                                    };
+                                                    let _ = tx.send(error_msg);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                server_log!(Error, "Ollama query for '{}' failed to connect using model '{}': {}", user_log, model, e);
+                                                let error_msg = ServerToClient::Broadcast {
+                                                    sender: "🤖 Ollama".to_string(),
+                                                    content: format!("Error: Failed to connect to Ollama: {}", e),
+                                                    timestamp: chrono::Utc::now(),
+                                                };
+                                                let _ = tx.send(error_msg);
+                                            }
+                                        }
+                                    });
+                                }
+                                continue;
+                            }
+
+                            server_log!(Info, "User '{}' sent chat message: '{}'", username, content);
                             let broadcast_msg = ServerToClient::Broadcast {
                                 sender: username.clone(),
                                 content,
