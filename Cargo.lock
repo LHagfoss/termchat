@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "tch"
-version = "0.1.6"
+version = "0.1.17"
 dependencies = [
  "base64",
  "chrono",
