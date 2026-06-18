@@ -36,7 +36,10 @@ fn open_file(path: &PathBuf) {
     let _ = path;
 }
 
-fn show_help_overlay(colors: theme::ThemeColors) {
+async fn show_help_overlay(
+    colors: theme::ThemeColors,
+    key_rx: &mut tokio::sync::mpsc::Receiver<Event>,
+) {
     let mut stdout = std::io::stdout();
     if crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen, crossterm::cursor::Hide).is_ok() {
         clear_screen();
@@ -44,13 +47,11 @@ fn show_help_overlay(colors: theme::ThemeColors) {
         print!("\r\n   Press ESC or Enter to close...\r\n");
         let _ = stdout.flush();
 
-        loop {
-            if let Ok(true) = event::poll(std::time::Duration::from_millis(50)) {
-                if let Ok(Event::Key(key)) = event::read() {
-                    if key.kind != event::KeyEventKind::Release {
-                        if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
-                            break;
-                        }
+        while let Some(evt) = key_rx.recv().await {
+            if let Event::Key(key) = evt {
+                if key.kind != event::KeyEventKind::Release {
+                    if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
+                        break;
                     }
                 }
             }
@@ -175,7 +176,7 @@ pub async fn run(
 
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
                             let current_colors = theme::ThemeColors::get(&input_state.theme_name);
-                            show_help_overlay(current_colors);
+                            show_help_overlay(current_colors, &mut key_rx).await;
                             let _ = draw_prompt(&input_state);
                             continue;
                         }
@@ -195,7 +196,7 @@ pub async fn run(
                                 let _ = draw_prompt(&input_state);
                             } else if cmd == "/help" {
                                 let current_colors = theme::ThemeColors::get(&input_state.theme_name);
-                                show_help_overlay(current_colors);
+                                show_help_overlay(current_colors, &mut key_rx).await;
                                 let _ = draw_prompt(&input_state);
                             } else if cmd == "/info" {
                                 let info_colors = theme::ThemeColors::get(&input_state.theme_name);
