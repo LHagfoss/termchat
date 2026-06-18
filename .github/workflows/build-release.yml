@@ -32,34 +32,28 @@ jobs:
           chmod +x termchat-x86_64-linux
           tar czf termchat-x86_64-linux.tar.gz termchat-x86_64-linux
 
-      - name: Create .deb package
-        shell: bash
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-deb
+        run: cargo binstall cargo-deb --no-confirm
+
+      - name: Build .deb package
+        run: cargo deb --target x86_64-unknown-linux-gnu --no-build
+
+      - name: Push to Buildkite Package Registries
         run: |
-          BINARY=termchat-x86_64-linux
-          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          mkdir -p "${BINARY}_deb/DEBIAN" "${BINARY}_deb/usr/bin"
-          cp "target/x86_64-unknown-linux-gnu/release/termchat" "${BINARY}_deb/usr/bin/termchat"
-
-          printf '%s\n' \
-            "Section: utils" \
-            "Priority: optional" \
-            "Architecture: amd64" \
-            "Maintainer: LHagfoss <you@example.com>" \
-            "Package: termchat" \
-            "Version: $VERSION" \
-            "Description: A fast, asynchronous terminal chat server and client" \
-            "Homepage: https://github.com/LHagfoss/termchat" \
-            > "${BINARY}_deb/DEBIAN/control"
-
-          dpkg-deb --build "${BINARY}_deb"
-          mv "${BINARY}_deb.deb" "termchat-x86_64-linux.deb"
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.BUILDKITE_API_TOKEN }}" \
+            -F "file=@$(ls target/x86_64-unknown-linux-gnu/debian/*.deb)" \
+            "https://api.buildkite.com/v2/packages/organizations/lucas-hagfoss/registries/termchat/packages"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             termchat-x86_64-linux.tar.gz
-            termchat-x86_64-linux.deb
+            target/x86_64-unknown-linux-gnu/debian/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
