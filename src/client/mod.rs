@@ -8,6 +8,7 @@ use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal;
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LinesCodec};
@@ -33,6 +34,30 @@ fn open_file(path: &PathBuf) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let _ = path;
+}
+
+fn show_help_overlay(colors: theme::ThemeColors) {
+    let mut stdout = std::io::stdout();
+    if crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen, crossterm::cursor::Hide).is_ok() {
+        clear_screen();
+        print_help(colors);
+        print!("\r\n   Press ESC or Enter to close...\r\n");
+        let _ = stdout.flush();
+
+        loop {
+            if let Ok(true) = event::poll(std::time::Duration::from_millis(50)) {
+                if let Ok(Event::Key(key)) = event::read() {
+                    if key.kind != event::KeyEventKind::Release {
+                        if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = crossterm::execute!(stdout, crossterm::cursor::Show, crossterm::terminal::LeaveAlternateScreen);
+    }
 }
 
 pub async fn run(
@@ -149,9 +174,8 @@ pub async fn run(
                         }
 
                         if key_event.code == KeyCode::Char('?') && input_state.buffer.is_empty() {
-                            clear_screen();
                             let current_colors = theme::ThemeColors::get(&input_state.theme_name);
-                            print_help(current_colors);
+                            show_help_overlay(current_colors);
                             let _ = draw_prompt(&input_state);
                             continue;
                         }
@@ -170,9 +194,8 @@ pub async fn run(
                                 print_welcome_banner(&server_name, &name, current_colors);
                                 let _ = draw_prompt(&input_state);
                             } else if cmd == "/help" {
-                                clear_screen();
                                 let current_colors = theme::ThemeColors::get(&input_state.theme_name);
-                                print_help(current_colors);
+                                show_help_overlay(current_colors);
                                 let _ = draw_prompt(&input_state);
                             } else if cmd == "/info" {
                                 let info_colors = theme::ThemeColors::get(&input_state.theme_name);

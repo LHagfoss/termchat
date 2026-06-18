@@ -110,12 +110,12 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                         if hist.len() >= 20 {
                             hist.pop_front();
                         }
-                        hist.push_back(format!("🤖 Ollama: {}", reply));
+                        hist.push_back(format!("Ollama: {}", reply));
                     }
 
                     let response_content = reply.to_string();
                     let _ = state.tx.send(ServerToClient::Broadcast {
-                        sender: "🤖 Ollama".to_string(),
+                        sender: "Ollama".to_string(),
                         content: response_content,
                         timestamp: chrono::Utc::now(),
                         sender_color: Some("cyan".to_string()),
@@ -123,7 +123,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                 } else {
                     server_log!(Warn, "Ollama query for '{}' returned empty choices using model '{}'", username, model);
                     let _ = state.tx.send(ServerToClient::Broadcast {
-                        sender: "🤖 Ollama".to_string(),
+                        sender: "Ollama".to_string(),
                         content: "Error: No completion choices returned from model.".to_string(),
                         timestamp: chrono::Utc::now(),
                         sender_color: Some("cyan".to_string()),
@@ -132,7 +132,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
             } else {
                 server_log!(Error, "Ollama query for '{}' failed to parse response using model '{}'", username, model);
                 let _ = state.tx.send(ServerToClient::Broadcast {
-                    sender: "🤖 Ollama".to_string(),
+                    sender: "Ollama".to_string(),
                     content: "Error: Failed to parse response from Ollama API.".to_string(),
                     timestamp: chrono::Utc::now(),
                     sender_color: Some("cyan".to_string()),
@@ -142,7 +142,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
         Err(e) => {
             server_log!(Error, "Ollama query for '{}' failed to connect using model '{}': {}", username, model, e);
             let _ = state.tx.send(ServerToClient::Broadcast {
-                sender: "🤖 Ollama".to_string(),
+                sender: "Ollama".to_string(),
                 content: format!("Error: Failed to connect to Ollama: {}", e),
                 timestamp: chrono::Utc::now(),
                 sender_color: Some("cyan".to_string()),

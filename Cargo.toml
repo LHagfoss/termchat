@@ -1,5 +1,5 @@
 [package]
-name = "termchat"
+name = "tch"
 version = "0.1.6"
 edition = "2024"
 
@@ -26,5 +26,5 @@ depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/termchat", "usr/bin/", "755"],
+    ["target/release/tch", "usr/bin/", "755"],
 ]
