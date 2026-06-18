@@ -75,6 +75,7 @@ pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(),
         debug,
         history: tokio::sync::Mutex::new(std::collections::VecDeque::with_capacity(20)),
         files: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        user_colors: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
@@ -152,8 +153,8 @@ async fn handle_client(
 
     let client_msg: ClientToServer = serde_json::from_str(&line)?;
 
-    let username = match client_msg {
-        ClientToServer::Handshake { name, token } => {
+    let (username, user_color) = match client_msg {
+        ClientToServer::Handshake { name, token, color } => {
             if token != state.token {
                 let err_msg = ServerToClient::Error {
                     message: "Invalid token provided".to_string(),
@@ -162,7 +163,7 @@ async fn handle_client(
                 let _ = framed.send(err_json).await;
                 return Err("Invalid token provided".into());
             }
-            name
+            (name, color)
         }
         _ => {
             let err_msg = ServerToClient::Error {
@@ -177,6 +178,9 @@ async fn handle_client(
     server_log!(Info, "'{}' successfully authenticated", username);
 
     state.users.lock().await.insert(username.clone());
+    if let Some(ref color) = user_color {
+        state.user_colors.lock().await.insert(username.clone(), color.clone());
+    }
 
     let welcome_msg = ServerToClient::Welcome {
         server_name: state.server_name.clone(),
@@ -247,12 +251,20 @@ async fn handle_client(
                                 } else {
                                     server_log!(Info, "User '{}' ran command '/ask' with question: '{}'", username, question);
                                     let ask_display = format!("asked Ollama: \"{}\"", question);
+                                    let sender_color = state.user_colors.lock().await.get(&username).cloned();
                                     let broadcast_msg = ServerToClient::Broadcast {
                                         sender: username.clone(),
                                         content: ask_display,
                                         timestamp: chrono::Utc::now(),
+                                        sender_color,
                                     };
                                     let _ = state.tx.send(broadcast_msg);
+
+                                    let thinking_msg = ServerToClient::SystemAlert {
+                                         content: format!("Info: Ollama is thinking (generating response for '{}')...", username),
+                                         timestamp: chrono::Utc::now(),
+                                     };
+                                     let _ = state.tx.send(thinking_msg);
 
                                     // Add the ask to history
                                     {
@@ -278,15 +290,17 @@ async fn handle_client(
                             }
 
                             server_log!(Info, "User '{}' sent chat message: '{}'", username, content);
-                            let broadcast_msg = ServerToClient::Broadcast {
-                                sender: username.clone(),
-                                content,
-                                timestamp: chrono::Utc::now(),
-                            };
-                            if state.debug {
-                                server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
-                            }
-                            let _ = state.tx.send(broadcast_msg);
+                             let sender_color = state.user_colors.lock().await.get(&username).cloned();
+                             let broadcast_msg = ServerToClient::Broadcast {
+                                 sender: username.clone(),
+                                 content,
+                                 timestamp: chrono::Utc::now(),
+                                 sender_color,
+                             };
+                             if state.debug {
+                                 server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
+                             }
+                             let _ = state.tx.send(broadcast_msg);
                         }
                         ClientToServer::Typing { is_typing } => {
                             let broadcast_msg = ServerToClient::UserTyping {
@@ -361,6 +375,30 @@ async fn handle_client(
                                     message: format!("File '{}' not found (session may have ended)", id),
                                 };
                                 if let Ok(json) = serde_json::to_string(&err) {
+                                    let _ = framed.send(json).await;
+                                }
+                            }
+                        }
+                        ClientToServer::SetColor { color } => {
+                            let mut colors = state.user_colors.lock().await;
+                            if let Some(ref c) = color {
+                                colors.insert(username.clone(), c.clone());
+                                server_log!(Info, "User '{}' set color to '{}'", username, c);
+                                let info = ServerToClient::SystemAlert {
+                                    content: format!("Success: Changed your name color to '{}'", c),
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                if let Ok(json) = serde_json::to_string(&info) {
+                                    let _ = framed.send(json).await;
+                                }
+                            } else {
+                                colors.remove(&username);
+                                server_log!(Info, "User '{}' reset their color", username);
+                                let info = ServerToClient::SystemAlert {
+                                    content: "Success: Reset your name color".to_string(),
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                if let Ok(json) = serde_json::to_string(&info) {
                                     let _ = framed.send(json).await;
                                 }
                             }

@@ -1,6 +1,6 @@
 pub const COMMANDS: &[&str] = &[
     "/help", "/users", "/clear", "/refresh", "/info", "/exit", "/theme", "/debug", "/ask",
-    "/send", "/download", "/open",
+    "/send", "/download", "/open", "/color",
 ];
 pub const THEME_NAMES: &[&str] = &[
     "blurple",

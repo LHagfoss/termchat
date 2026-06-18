@@ -113,11 +113,12 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                         hist.push_back(format!("🤖 Ollama: {}", reply));
                     }
 
-                    let response_content = format!("🤖 [Ollama ({})]:\n{}", model, reply);
+                    let response_content = reply.to_string();
                     let _ = state.tx.send(ServerToClient::Broadcast {
                         sender: "🤖 Ollama".to_string(),
                         content: response_content,
                         timestamp: chrono::Utc::now(),
+                        sender_color: Some("cyan".to_string()),
                     });
                 } else {
                     server_log!(Warn, "Ollama query for '{}' returned empty choices using model '{}'", username, model);
@@ -125,6 +126,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                         sender: "🤖 Ollama".to_string(),
                         content: "Error: No completion choices returned from model.".to_string(),
                         timestamp: chrono::Utc::now(),
+                        sender_color: Some("cyan".to_string()),
                     });
                 }
             } else {
@@ -133,6 +135,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                     sender: "🤖 Ollama".to_string(),
                     content: "Error: Failed to parse response from Ollama API.".to_string(),
                     timestamp: chrono::Utc::now(),
+                    sender_color: Some("cyan".to_string()),
                 });
             }
         }
@@ -142,6 +145,7 @@ pub async fn handle_ask(question: String, username: String, state: Arc<ServerSta
                 sender: "🤖 Ollama".to_string(),
                 content: format!("Error: Failed to connect to Ollama: {}", e),
                 timestamp: chrono::Utc::now(),
+                sender_color: Some("cyan".to_string()),
             });
         }
     }

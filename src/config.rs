@@ -8,6 +8,8 @@ pub struct Config {
     pub name: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -27,6 +29,7 @@ pub fn load_or_create_config() -> Config {
         return toml::from_str(&contents).unwrap_or_else(|_| Config {
             name: "default-user".to_string(),
             theme: default_theme(),
+            color: None,
         });
     }
 
@@ -48,6 +51,7 @@ pub fn load_or_create_config() -> Config {
     let new_config = Config {
         name,
         theme: default_theme(),
+        color: None,
     };
 
     fs::create_dir_all(config_dir).expect("Failed to create config directory");
@@ -81,6 +85,21 @@ pub fn update_theme(new_theme: String) -> Config {
 
     let mut config = load_or_create_config();
     config.theme = new_theme;
+
+    fs::create_dir_all(config_dir).expect("Failed to create config directory");
+    let toml_string = toml::to_string(&config).unwrap();
+    fs::write(&config_file, toml_string).expect("Failed to write config.toml");
+
+    config
+}
+
+pub fn update_color(new_color: Option<String>) -> Config {
+    let proj_dirs = ProjectDirs::from("", "", "tc").expect("Could not find the home directory");
+    let config_dir = proj_dirs.config_dir();
+    let config_file = config_dir.join("config.toml");
+
+    let mut config = load_or_create_config();
+    config.color = new_color;
 
     fs::create_dir_all(config_dir).expect("Failed to create config directory");
     let toml_string = toml::to_string(&config).unwrap();

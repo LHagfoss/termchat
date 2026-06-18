@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ClientToServer {
-    Handshake { name: String, token: String },
+    Handshake { name: String, token: String, color: Option<String> },
     ChatMessage { content: String },
     Typing { is_typing: bool },
     Ping,
     FileUpload { filename: String, data: String },
     FileRequest { id: String },
+    SetColor { color: Option<String> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -20,6 +21,7 @@ pub enum ServerToClient {
         sender: String,
         content: String,
         timestamp: DateTime<Utc>,
+        sender_color: Option<String>,
     },
     SystemAlert {
         content: String,

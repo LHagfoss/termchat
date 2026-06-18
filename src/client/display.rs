@@ -49,6 +49,41 @@ pub fn get_colored_name(name: &str) -> colored::ColoredString {
     name.color(color).bold()
 }
 
+pub fn parse_terminal_color(color_str: &str) -> Option<colored::Color> {
+    let clean = color_str.trim().to_lowercase();
+    match clean.as_str() {
+        "black" => Some(colored::Color::Black),
+        "red" => Some(colored::Color::Red),
+        "green" => Some(colored::Color::Green),
+        "yellow" => Some(colored::Color::Yellow),
+        "blue" => Some(colored::Color::Blue),
+        "magenta" => Some(colored::Color::Magenta),
+        "cyan" => Some(colored::Color::Cyan),
+        "white" => Some(colored::Color::White),
+        "brightblack" | "gray" | "grey" => Some(colored::Color::BrightBlack),
+        "brightred" => Some(colored::Color::BrightRed),
+        "brightgreen" => Some(colored::Color::BrightGreen),
+        "brightyellow" => Some(colored::Color::BrightYellow),
+        "brightblue" => Some(colored::Color::BrightBlue),
+        "brightmagenta" => Some(colored::Color::BrightMagenta),
+        "brightcyan" => Some(colored::Color::BrightCyan),
+        "brightwhite" => Some(colored::Color::BrightWhite),
+        other => {
+            let hex = other.strip_prefix('#').unwrap_or(other);
+            if hex.len() == 6 {
+                if let (Ok(r), Ok(g), Ok(b)) = (
+                    u8::from_str_radix(&hex[0..2], 16),
+                    u8::from_str_radix(&hex[2..4], 16),
+                    u8::from_str_radix(&hex[4..6], 16),
+                ) {
+                    return Some(colored::Color::TrueColor { r, g, b });
+                }
+            }
+            None
+        }
+    }
+}
+
 pub struct RawModeGuard;
 
 impl RawModeGuard {
@@ -224,6 +259,7 @@ pub fn print_help(colors: ThemeColors) {
         ("/debug", "Toggle local debug mode"),
         ("/ask <query>", "Ask local Ollama AI"),
         ("/exit", "Exit the chat client"),
+        ("/color <val>", "Change name color (e.g., red, #ff9900)"),
         ("/theme <name>", "Change color theme"),
         ("Ctrl+C", "Exit the chat client"),
         ("Ctrl+L", "Clear screen"),
@@ -300,10 +336,19 @@ pub fn print_message(
             sender,
             content,
             timestamp,
+            sender_color,
         } => {
             let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
             let display_name = format_username(sender);
-            let colored_name = get_colored_name(&display_name);
+            let colored_name = if let Some(color_str) = sender_color {
+                if let Some(parsed_color) = parse_terminal_color(color_str) {
+                    display_name.color(parsed_color).bold()
+                } else {
+                    get_colored_name(&display_name)
+                }
+            } else {
+                get_colored_name(&display_name)
+            };
             let (highlighted_content, has_self_mention) =
                 highlight_mentions(content, own_username, online_users, colors);
             let normalized = highlighted_content
@@ -322,17 +367,61 @@ pub fn print_message(
         }
         ServerToClient::SystemAlert { content, .. } => {
             let normalized = content.replace("\r\n", "\n").replace('\n', "\r\n");
-            print!(
-                " {} {}\r\n",
-                "✦"
-                    .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
-                    .bold(),
-                normalized.dimmed()
-            );
+            if normalized.starts_with("Usage:") || normalized.starts_with("[Usage]") {
+                let text = normalized.strip_prefix("[Usage]").unwrap_or(&normalized).strip_prefix("Usage:").unwrap_or(&normalized).trim();
+                print!(
+                    " {} {}: {}\r\n",
+                    "⚠".yellow().bold(),
+                    "Usage".yellow().bold(),
+                    text
+                );
+            } else if normalized.starts_with("Error:") || normalized.starts_with("[Error]") {
+                let text = normalized.strip_prefix("[Error]").unwrap_or(&normalized).strip_prefix("Error:").unwrap_or(&normalized).trim();
+                print!(
+                    " {} {}: {}\r\n",
+                    "✖".red().bold(),
+                    "Error".red().bold(),
+                    text.red()
+                );
+            } else if normalized.starts_with("Info:") || normalized.starts_with("[Info]") {
+                let text = normalized.strip_prefix("[Info]").unwrap_or(&normalized).strip_prefix("Info:").unwrap_or(&normalized).trim();
+                print!(
+                    " {} {}: {}\r\n",
+                    "ℹ".blue().bold(),
+                    "Info".blue().bold(),
+                    text
+                );
+            } else if normalized.starts_with("Success:") || normalized.starts_with("[Success]") || normalized.contains("successfully") {
+                let text = normalized.strip_prefix("[Success]").unwrap_or(&normalized).strip_prefix("Success:").unwrap_or(&normalized).trim();
+                print!(
+                    " {} {}\r\n",
+                    "✔".green().bold(),
+                    text.green()
+                );
+            } else if normalized.starts_with("Downloaded") || normalized.starts_with("[Downloaded]") || normalized.contains("Downloaded") {
+                print!(
+                    " {} {}\r\n",
+                    "✔".green().bold(),
+                    normalized.green()
+                );
+            } else {
+                print!(
+                    " {} {}\r\n",
+                    "✦"
+                        .truecolor(colors.accent.0, colors.accent.1, colors.accent.2)
+                        .bold(),
+                    normalized.dimmed()
+                );
+            }
         }
         ServerToClient::Error { message } => {
             let normalized = message.replace("\r\n", "\n").replace('\n', "\r\n");
-            print!(" {} {}\r\n", "✖".red().bold(), normalized.red());
+            print!(
+                " {} {}: {}\r\n",
+                "✖".red().bold(),
+                "Error".red().bold(),
+                normalized.red()
+            );
         }
         ServerToClient::FileAvailable { id, filename, size_bytes, sender, timestamp } => {
             let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");

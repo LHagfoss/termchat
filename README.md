@@ -18,6 +18,7 @@ A fast, asynchronous, bi-directional chat server and client built entirely for t
 - [x] inline chat completions
 - [x] theme
 - [x] /ask command for chatting with LLMs
+- [x] /color to change color of name
 - [ ] persistant chat or history
 - [ ] better managment with user (auth and config idk)
 
@@ -35,29 +36,16 @@ This downloads the latest release binary and places it in `~/.local/bin`. Make s
 
 ### Windows
 
-**Option 1 — winget** (requires a release to be published first):
-```powershell
-winget install LHagfoss.termchat
-```
-
-**Option 2 — PowerShell one-liner:**
 ```powershell
 irm https://raw.githubusercontent.com/LHagfoss/termchat/main/scripts/install.ps1 | iex
 ```
-
-Or download the `.exe` directly from [Releases](https://github.com/LHagfoss/termchat/releases).
-
 ### Arch Linux (AUR)
 
-```bash
-yay -S termchat    # or your preferred AUR helper
-```
-
-You'll need to push a `PKGBUILD` to a personal AUR repo and update the version with each release. See `AUR/PKGBUILD` in this repo for the template.
+Coming soon — will publish when im not lazy.
 
 ### Homebrew (macOS / Linux)
 
-Coming soon — will publish to a tap once we have stable releases.
+Coming soon — will publish when im not lazy.
 
 ### From source
 

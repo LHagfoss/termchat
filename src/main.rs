@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let final_username = name.unwrap_or(user_config.name);
 
-            client::run(ip, port, final_username, token, user_config.theme).await?;
+            client::run(ip, port, final_username, token, user_config.theme, user_config.color).await?;
         }
         cli::Commands::Profile { name } => {
             let updated = config::update_name(name.clone());

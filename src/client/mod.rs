@@ -41,6 +41,7 @@ pub async fn run(
     name: String,
     token: String,
     theme_name: String,
+    color: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
     println!("Connecting to {}...", addr);
@@ -51,6 +52,7 @@ pub async fn run(
     let handshake = ClientToServer::Handshake {
         name: name.clone(),
         token: token.clone(),
+        color,
     };
     let handshake_json = serde_json::to_string(&handshake)?;
     framed.send(handshake_json).await?;
@@ -200,6 +202,27 @@ pub async fn run(
                                     };
                                     handle_incoming_message(error_msg, &mut input_state, &name);
                                 }
+                            } else if cmd.starts_with("/color ") || cmd == "/color" {
+                                let target_color = if cmd == "/color" {
+                                    "".to_string()
+                                } else {
+                                    cmd[7..].trim().to_string()
+                                };
+
+                                if target_color.is_empty() {
+                                    let _ = crate::config::update_color(None);
+                                    let set_msg = ClientToServer::SetColor { color: None };
+                                    if let Ok(json) = serde_json::to_string(&set_msg) {
+                                        let _ = outbound_tx.send(json).await;
+                                    }
+                                } else {
+                                    let _ = crate::config::update_color(Some(target_color.clone()));
+                                    let set_msg = ClientToServer::SetColor { color: Some(target_color.clone()) };
+                                    if let Ok(json) = serde_json::to_string(&set_msg) {
+                                        let _ = outbound_tx.send(json).await;
+                                    }
+                                }
+                                let _ = draw_prompt(&input_state);
                             } else if cmd.starts_with("/ask ") || cmd == "/ask" {
                                 let question = if cmd == "/ask" { "".to_string() } else { cmd[5..].trim().to_string() };
                                 if question.is_empty() {
