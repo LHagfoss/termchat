@@ -16,3 +16,4 @@ tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 toml = "1.1.2"
 reqwest = { version = "0.12", features = ["json"] }
+base64 = "0.22"

@@ -2,10 +2,13 @@ pub mod display;
 pub mod input;
 pub mod theme;
 
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use colored::Colorize;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal;
 use futures::{SinkExt, StreamExt};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -16,6 +19,21 @@ use display::{
 };
 use input::InputState;
 use theme::THEME_NAMES;
+
+fn get_downloads_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().join(".termchat").join("downloads"))
+        .unwrap_or_else(|| PathBuf::from(".termchat/downloads"))
+}
+
+fn open_file(path: &PathBuf) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = path;
+}
 
 pub async fn run(
     ip: String,
@@ -28,7 +46,7 @@ pub async fn run(
     println!("Connecting to {}...", addr);
 
     let stream = TcpStream::connect(&addr).await?;
-    let mut framed = Framed::new(stream, LinesCodec::new());
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(16 * 1024 * 1024));
 
     let handshake = ClientToServer::Handshake {
         name: name.clone(),
@@ -76,6 +94,8 @@ pub async fn run(
     print_welcome_banner(&server_name, &name, colors);
 
     let mut input_state = InputState::new(theme_name);
+    let mut downloaded_files: HashMap<String, PathBuf> = HashMap::new();
+    let mut pending_open: Option<String> = None;
 
     let (key_tx, mut key_rx) = tokio::sync::mpsc::channel::<Event>(100);
     std::thread::spawn(move || {
@@ -181,12 +201,7 @@ pub async fn run(
                                     handle_incoming_message(error_msg, &mut input_state, &name);
                                 }
                             } else if cmd.starts_with("/ask ") || cmd == "/ask" {
-                                let question = if cmd == "/ask" {
-                                    "".to_string()
-                                } else {
-                                    cmd[5..].trim().to_string()
-                                };
-
+                                let question = if cmd == "/ask" { "".to_string() } else { cmd[5..].trim().to_string() };
                                 if question.is_empty() {
                                     let error_msg = ServerToClient::SystemAlert {
                                         content: "Usage: /ask <your question>".to_string(),
@@ -203,6 +218,74 @@ pub async fn run(
                                         handle_incoming_message(debug_alert, &mut input_state, &name);
                                     }
                                     if let Ok(json) = serde_json::to_string(&chat_msg) {
+                                        let _ = outbound_tx.send(json).await;
+                                    }
+                                }
+                                let _ = draw_prompt(&input_state);
+                            } else if cmd.starts_with("/send ") {
+                                let path = cmd[6..].trim().to_string();
+                                match std::fs::read(&path) {
+                                    Ok(data) => {
+                                        const MAX: usize = 10 * 1024 * 1024;
+                                        if data.len() > MAX {
+                                            let err = ServerToClient::Error {
+                                                message: format!("File too large ({}MB > 10MB limit)", data.len() / 1024 / 1024),
+                                            };
+                                            handle_incoming_message(err, &mut input_state, &name);
+                                        } else {
+                                            let filename = std::path::Path::new(&path)
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("file")
+                                                .to_string();
+                                            let msg = ClientToServer::FileUpload {
+                                                filename,
+                                                data: B64.encode(&data),
+                                            };
+                                            if let Ok(json) = serde_json::to_string(&msg) {
+                                                let _ = outbound_tx.send(json).await;
+                                            }
+                                            let info = ServerToClient::SystemAlert {
+                                                content: format!("Uploading {}...", path),
+                                                timestamp: chrono::Utc::now(),
+                                            };
+                                            handle_incoming_message(info, &mut input_state, &name);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let err = ServerToClient::Error {
+                                            message: format!("Cannot read '{}': {}", path, e),
+                                        };
+                                        handle_incoming_message(err, &mut input_state, &name);
+                                    }
+                                }
+                                let _ = draw_prompt(&input_state);
+                            } else if cmd.starts_with("/download ") || cmd.starts_with("/open ") {
+                                let (is_open, id_raw) = if cmd.starts_with("/open ") {
+                                    (true, cmd[6..].trim().to_uppercase())
+                                } else {
+                                    (false, cmd[10..].trim().to_uppercase())
+                                };
+
+                                if id_raw.is_empty() {
+                                    let err = ServerToClient::SystemAlert {
+                                        content: "Usage: /download <id> or /open <id>".to_string(),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    handle_incoming_message(err, &mut input_state, &name);
+                                } else if is_open {
+                                    if let Some(path) = downloaded_files.get(&id_raw) {
+                                        open_file(path);
+                                    } else {
+                                        pending_open = Some(id_raw.clone());
+                                        let msg = ClientToServer::FileRequest { id: id_raw };
+                                        if let Ok(json) = serde_json::to_string(&msg) {
+                                            let _ = outbound_tx.send(json).await;
+                                        }
+                                    }
+                                } else {
+                                    let msg = ClientToServer::FileRequest { id: id_raw };
+                                    if let Ok(json) = serde_json::to_string(&msg) {
                                         let _ = outbound_tx.send(json).await;
                                     }
                                 }
@@ -249,6 +332,47 @@ pub async fn run(
                                 ServerToClient::UsersList { users } => {
                                     input_state.online_users = users;
                                     let _ = draw_prompt(&input_state);
+                                }
+                                ServerToClient::FileData { ref id, ref filename, ref data } => {
+                                    match B64.decode(data) {
+                                        Ok(raw) => {
+                                            let dir = get_downloads_dir();
+                                            let _ = std::fs::create_dir_all(&dir);
+                                            let out_path = dir.join(filename);
+                                            match std::fs::write(&out_path, &raw) {
+                                                Ok(()) => {
+                                                    let should_open = pending_open.as_deref() == Some(id.as_str());
+                                                    if should_open {
+                                                        pending_open = None;
+                                                        open_file(&out_path);
+                                                    }
+                                                    downloaded_files.insert(id.clone(), out_path.clone());
+                                                    let alert = ServerToClient::SystemAlert {
+                                                        content: format!(
+                                                            "Downloaded: {} → {}{}",
+                                                            filename,
+                                                            out_path.display(),
+                                                            if should_open { " (opening...)" } else { "" }
+                                                        ),
+                                                        timestamp: chrono::Utc::now(),
+                                                    };
+                                                    handle_incoming_message(alert, &mut input_state, &name);
+                                                }
+                                                Err(e) => {
+                                                    let err = ServerToClient::Error {
+                                                        message: format!("Failed to save file: {}", e),
+                                                    };
+                                                    handle_incoming_message(err, &mut input_state, &name);
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            let err = ServerToClient::Error {
+                                                message: "Failed to decode received file data".to_string(),
+                                            };
+                                            handle_incoming_message(err, &mut input_state, &name);
+                                        }
+                                    }
                                 }
                                 _ => {
                                     handle_incoming_message(msg, &mut input_state, &name);

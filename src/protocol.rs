@@ -7,6 +7,8 @@ pub enum ClientToServer {
     ChatMessage { content: String },
     Typing { is_typing: bool },
     Ping,
+    FileUpload { filename: String, data: String },
+    FileRequest { id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -34,4 +36,16 @@ pub enum ServerToClient {
         users: Vec<String>,
     },
     Pong,
+    FileAvailable {
+        id: String,
+        filename: String,
+        size_bytes: usize,
+        sender: String,
+        timestamp: DateTime<Utc>,
+    },
+    FileData {
+        id: String,
+        filename: String,
+        data: String,
+    },
 }

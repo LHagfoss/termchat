@@ -1,6 +1,7 @@
 pub mod ollama;
 pub mod state;
 
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use colored::Colorize;
 use futures::{SinkExt, StreamExt};
 use std::collections::HashSet;
@@ -11,7 +12,7 @@ use tokio::sync::broadcast;
 use tokio_util::codec::{Framed, LinesCodec};
 
 use crate::protocol::{ClientToServer, ServerToClient};
-use state::ServerState;
+use state::{ServerState, StoredFile};
 
 #[macro_export]
 macro_rules! server_log {
@@ -73,6 +74,7 @@ pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(),
         users: tokio::sync::Mutex::new(HashSet::new()),
         debug,
         history: tokio::sync::Mutex::new(std::collections::VecDeque::with_capacity(20)),
+        files: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
@@ -142,7 +144,7 @@ async fn handle_client(
     stream: TcpStream,
     state: Arc<ServerState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut framed = Framed::new(stream, LinesCodec::new());
+    let mut framed = Framed::new(stream, LinesCodec::new_with_max_length(16 * 1024 * 1024));
 
     let Some(Ok(line)) = framed.next().await else {
         return Err("Client disconnected before sending a handshake".into());
@@ -299,6 +301,70 @@ async fn handle_client(
                                 let _ = framed.send(json).await;
                             }
                         }
+                        ClientToServer::FileUpload { filename, data } => {
+                            const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+                            match B64.decode(&data) {
+                                Ok(raw) if raw.len() <= MAX_FILE_BYTES => {
+                                    let safe_name = std::path::Path::new(&filename)
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("file")
+                                        .to_string();
+                                    let size = raw.len();
+                                    let id = generate_file_id();
+                                    server_log!(Info, "User '{}' uploaded '{}' ({} bytes) → id {}", username, safe_name, size, id);
+                                    state.files.lock().await.insert(id.clone(), StoredFile {
+                                        filename: safe_name.clone(),
+                                        data: raw,
+                                    });
+                                    let _ = state.tx.send(ServerToClient::FileAvailable {
+                                        id,
+                                        filename: safe_name,
+                                        size_bytes: size,
+                                        sender: username.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                }
+                                Ok(_) => {
+                                    let err = ServerToClient::Error {
+                                        message: format!("File too large (max {}MB)", MAX_FILE_BYTES / 1024 / 1024),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&err) {
+                                        let _ = framed.send(json).await;
+                                    }
+                                }
+                                Err(_) => {
+                                    let err = ServerToClient::Error {
+                                        message: "Failed to decode file data".to_string(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&err) {
+                                        let _ = framed.send(json).await;
+                                    }
+                                }
+                            }
+                        }
+                        ClientToServer::FileRequest { id } => {
+                            let files = state.files.lock().await;
+                            if let Some(file) = files.get(&id) {
+                                let msg = ServerToClient::FileData {
+                                    id: id.clone(),
+                                    filename: file.filename.clone(),
+                                    data: B64.encode(&file.data),
+                                };
+                                drop(files);
+                                if let Ok(json) = serde_json::to_string(&msg) {
+                                    let _ = framed.send(json).await;
+                                }
+                            } else {
+                                drop(files);
+                                let err = ServerToClient::Error {
+                                    message: format!("File '{}' not found (session may have ended)", id),
+                                };
+                                if let Ok(json) = serde_json::to_string(&err) {
+                                    let _ = framed.send(json).await;
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -344,6 +410,20 @@ async fn handle_client(
     let _ = state.tx.send(ServerToClient::UsersList { users: active_users_after });
 
     Ok(())
+}
+
+fn generate_file_id() -> String {
+    let charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let mut id = String::new();
+    for _ in 0..8 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        id.push(charset.chars().nth((seed % charset.len() as u128) as usize).unwrap());
+    }
+    id
 }
 
 fn generate_token() -> String {

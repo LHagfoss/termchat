@@ -1,0 +1,19 @@
+# Winget manifest for LHagfoss.termchat
+# To submit to the community winget-pkgs repo, create a PR at:
+# https://github.com/microsoft/winget-pkgs/tree/master/manifests/l/LHagfoss/termchat
+PackageIdentifier: LHagfoss.termchat
+PackageVersion: 0.1.0
+ManifestType: version
+ManifestVersion: 1.6.0
+
+Installers:
+  - Architecture: x86_64
+    InstallerType: nullscript
+    # Update these values after each release:
+    InstallerUrl: https://github.com/LHagfoss/termchat/releases/download/v0.1.0/termchat-x86_64-windows.exe
+    # Run: sha256sum termchat-x86_64-windows.exe
+    InstallerSha256: PLACEHOLDER_SHA256
+    InstallModes:
+      - silent
+      - interactive
+    ReleaseDate: 2026-06-18

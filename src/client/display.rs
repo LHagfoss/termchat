@@ -6,6 +6,16 @@ use crate::protocol::ServerToClient;
 use super::input::{get_visible_prompt_and_cursor, InputState};
 use super::theme::ThemeColors;
 
+pub fn format_file_size(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 pub fn format_username(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     if chars.len() > 10 {
@@ -205,6 +215,9 @@ pub fn print_help(colors: ThemeColors) {
     for (cmd, desc) in [
         ("/help", "Show this help menu"),
         ("/users", "List all online users"),
+        ("/send <path>", "Share a file"),
+        ("/download <id>", "Download a shared file"),
+        ("/open <id>", "Download & open a file natively"),
         ("/clear", "Clear screen"),
         ("/refresh", "Clear screen & show welcome banner"),
         ("/info", "Show connection info"),
@@ -320,6 +333,21 @@ pub fn print_message(
         ServerToClient::Error { message } => {
             let normalized = message.replace("\r\n", "\n").replace('\n', "\r\n");
             print!(" {} {}\r\n", "✖".red().bold(), normalized.red());
+        }
+        ServerToClient::FileAvailable { id, filename, size_bytes, sender, timestamp } => {
+            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
+            let display_name = format_username(sender);
+            let colored_name = get_colored_name(&display_name);
+            let size_str = format_file_size(*size_bytes);
+            print!(
+                " {} {}: {} {} {} — /download {}\r\n",
+                local_time.to_string().dimmed(),
+                colored_name,
+                "📎".truecolor(colors.accent.0, colors.accent.1, colors.accent.2),
+                filename.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
+                size_str.dimmed(),
+                id.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
+            );
         }
         _ => {}
     }
