@@ -9,36 +9,72 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Release ${{ matrix.os }}
+  build-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: "-C strip=symbols"
+
+      - name: Create tar.gz
+        shell: bash
+        run: |
+          cp target/x86_64-unknown-linux-gnu/release/termchat termchat-x86_64-linux
+          chmod +x termchat-x86_64-linux
+          tar czf termchat-x86_64-linux.tar.gz termchat-x86_64-linux
+
+      - name: Create .deb package
+        shell: bash
+        run: |
+          BINARY=termchat-x86_64-linux
+          mkdir -p "${BINARY}_deb/DEBIAN" "${BINARY}_deb/usr/bin"
+          cp "target/x86_64-unknown-linux-gnu/release/termchat" "${BINARY}_deb/usr/bin/termchat"
+          
+          cat > "${BINARY}_deb/DEBIAN/control" << EOF
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: LHagfoss <you@example.com>
+Package: termchat
+Version: ${{ github.ref_name }}
+Description: A fast, asynchronous terminal chat server and client
+Homepage: https://github.com/LHagfoss/termchat
+EOF
+
+          dpkg-deb --build "${BINARY}_deb"
+          mv "${BINARY}_deb.deb" "termchat-x86_64-linux.deb"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            termchat-x86_64-linux.tar.gz
+            termchat-x86_64-linux.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: macOS
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux
-          - target: x86_64-unknown-linux-gnu
-            os: linux
-            runner: ubuntu-latest
-            name: termchat-x86_64-linux
-          - target: aarch64-unknown-linux-gnu
-            os: linux
-            runner: ubuntu-latest
-            name: termchat-aarch64-linux
-          # macOS
           - target: x86_64-apple-darwin
-            os: macos
             runner: macos-13
             name: termchat-x86_64-macos
           - target: aarch64-apple-darwin
-            os: macos
             runner: macos-latest
             name: termchat-aarch64-macos
-          # Windows
-          - target: x86_64-pc-windows-msvc
-            os: windows
-            runner: windows-latest
-            name: termchat-x86_64-windows
 
     steps:
       - uses: actions/checkout@v4
@@ -53,32 +89,46 @@ jobs:
         env:
           RUSTFLAGS: "-C strip=symbols"
 
-      - name: Package (Linux/macOS)
-        if: matrix.os != 'windows'
+      - name: Package
         shell: bash
         run: |
           cp target/${{ matrix.target }}/release/termchat ${{ matrix.name }}
           chmod +x ${{ matrix.name }}
           tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
 
-      - name: Package (Windows)
-        if: matrix.os == 'windows'
-        shell: bash
-        run: |
-          cp target/${{ matrix.target }}/release/termchat.exe ${{ matrix.name }}.exe
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.name }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+        env:
+          RUSTFLAGS: "-C strip=symbols"
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ matrix.name }}${{ matrix.os == 'windows' && '.exe' || '' }}
-            ${{ matrix.name }}.tar.gz
+          files: target/x86_64-pc-windows-msvc/release/termchat.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   checksums:
     name: Generate checksums
-    needs: release
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
