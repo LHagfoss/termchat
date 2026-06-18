@@ -114,10 +114,13 @@ jobs:
         env:
           RUSTFLAGS: "-C strip=symbols"
 
+      - name: Rename binary
+        run: copy target\x86_64-pc-windows-msvc\release\termchat.exe termchat-x86_64-windows.exe
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: target/x86_64-pc-windows-msvc/release/termchat.exe
+          files: termchat-x86_64-windows.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
