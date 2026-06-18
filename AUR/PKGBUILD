@@ -1,7 +1,6 @@
 # Maintainer: LHagfoss <you@example.com>
 pkgname=termchat
-_pkgver=0.1.0
-pkgver=0.1.0
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="A fast, asynchronous, bi-directional terminal chat server and client"
 arch=('x86_64' 'aarch64')
