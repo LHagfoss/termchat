@@ -28,9 +28,9 @@ jobs:
       - name: Create tar.gz
         shell: bash
         run: |
-          cp target/x86_64-unknown-linux-gnu/release/termchat termchat-x86_64-linux
-          chmod +x termchat-x86_64-linux
-          tar czf termchat-x86_64-linux.tar.gz termchat-x86_64-linux
+          cp target/x86_64-unknown-linux-gnu/release/tch tch-x86_64-linux
+          chmod +x tch-x86_64-linux
+          tar czf tch-x86_64-linux.tar.gz tch-x86_64-linux
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
@@ -52,7 +52,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            termchat-x86_64-linux.tar.gz
+            tch-x86_64-linux.tar.gz
             target/x86_64-unknown-linux-gnu/debian/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,12 +64,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            name: termchat-x86_64-macos
+          # - target: x86_64-apple-darwin
+          #   runner: macos-13
+          #   name: tch-x86_64-macos
           - target: aarch64-apple-darwin
             runner: macos-latest
-            name: termchat-aarch64-macos
+            name: tch-aarch64-macos
 
     steps:
       - uses: actions/checkout@v4
@@ -87,7 +87,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/termchat ${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/tch ${{ matrix.name }}
           chmod +x ${{ matrix.name }}
           tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
 
@@ -115,12 +115,12 @@ jobs:
           RUSTFLAGS: "-C strip=symbols"
 
       - name: Rename binary
-        run: copy target\x86_64-pc-windows-msvc\release\termchat.exe termchat-x86_64-windows.exe
+        run: copy target\x86_64-pc-windows-msvc\release\tch.exe tch-x86_64-windows.exe
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: termchat-x86_64-windows.exe
+          files: tch-x86_64-windows.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
