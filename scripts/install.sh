@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO="LHagfoss/termchat"
 INSTALL_DIR="$HOME/.local/bin"
-BINARY_NAME="termchat"
+BINARY_NAME="tch"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -71,7 +71,7 @@ main() {
       asset_ext="tar.gz"
       download_asset "$os" "$arch" "$asset_name" "$asset_ext"
 
-      mkdir -p "$INSTALL_DIR"
+      mkdir -p "$INSTALL_DIR" "/tmp/${BINARY_NAME}_install"
       tar xzf "/tmp/${BINARY_NAME}_install.$asset_ext" -C "/tmp/${BINARY_NAME}_install/"
       mv "/tmp/${BINARY_NAME}_install/$asset_name" "$INSTALL_DIR/$BINARY_NAME"
       chmod +x "$INSTALL_DIR/$BINARY_NAME"

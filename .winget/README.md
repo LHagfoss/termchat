@@ -8,7 +8,7 @@ winget install LHagfoss.termchat
 
 ## How to make it work
 
-1. After publishing a GitHub release (tag `v0.1.0`), download the `termchat-x86_64-windows.exe` asset
+1. After publishing a GitHub release (tag `v0.1.0`), download the `tch-x86_64-windows.exe` asset
 2. Compute its SHA256: `sha256sum tch-x86_64-windows.exe`
 3. Replace `PLACEHOLDER_SHA256` in `LHagfoss.termchat.0.1.0.yaml` with the real hash
 4. Commit and push

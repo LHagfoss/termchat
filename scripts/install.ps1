@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Repo = "LHagfoss/termchat"
-$BinaryName = "termchat"
+$BinaryName = "tch"
 $Arch = if ($Env:PROCESSOR_ARCHITECTURE -eq "AMD64") { "x86_64" } else { $null }
 
 if (-not $Arch) {
