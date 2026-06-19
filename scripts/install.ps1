@@ -26,7 +26,7 @@ try {
     exit 1
 }
 
-$assetName = "termchat-${Arch}-windows.exe"
+$assetName = "tch-${Arch}-windows.exe"
 $asset = $release.assets | Where-Object { $_.name -eq $assetName }
 
 if (-not $asset) {

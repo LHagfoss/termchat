@@ -41,7 +41,7 @@ detect_arch() {
 download_asset() {
   local os arch name ext
   os="$1"; arch="$2"; name="$3"; ext="$4"
-  
+
   # Try GitHub API for the latest release
   local api_url="https://api.github.com/repos/$REPO/releases/latest"
   local asset_url
@@ -59,25 +59,25 @@ download_asset() {
 
 main() {
   local os arch asset_name asset_ext
-  
+
   os="$(detect_os)"
   arch="$(detect_arch)"
-  
+
   echo "Detecting system: $os / $arch"
 
   case "$os" in
     linux|darwin)
-      asset_name="termchat-${arch}-${os}"
+      asset_name="tch-${arch}-${os}"
       asset_ext="tar.gz"
       download_asset "$os" "$arch" "$asset_name" "$asset_ext"
-      
+
       mkdir -p "$INSTALL_DIR"
       tar xzf "/tmp/${BINARY_NAME}_install.$asset_ext" -C "/tmp/${BINARY_NAME}_install/"
       mv "/tmp/${BINARY_NAME}_install/$asset_name" "$INSTALL_DIR/$BINARY_NAME"
       chmod +x "$INSTALL_DIR/$BINARY_NAME"
-      
+
       info "Installed $BINARY_NAME to $INSTALL_DIR/$BINARY_NAME"
-      
+
       # Check if ~/.local/bin is in PATH
       if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         warn "$INSTALL_DIR is not in your PATH."
@@ -85,14 +85,14 @@ main() {
         echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
       fi
       ;;
-      
+
     windows)
-      asset_name="termchat-${arch}-windows"
+      asset_name="tch-${arch}-windows"
       asset_ext="exe"
       download_asset "$os" "$arch" "$asset_name" "$asset_ext"
-      
+
       mv "/tmp/${BINARY_NAME}_install.$asset_ext" "$INSTALL_DIR/$BINARY_NAME.exe"
-      
+
       info "Installed $BINARY_NAME.exe to $INSTALL_DIR/$BINARY_NAME.exe"
       warn "To run in PowerShell, you may need to bypass execution policy:"
       echo "  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass"
@@ -101,7 +101,7 @@ main() {
 
   # Cleanup
   rm -rf "/tmp/${BINARY_NAME}_install" "/tmp/${BINARY_NAME}_install.*"
-  
+
   info "Run '$BINARY_NAME --help' to get started!"
 }
 
