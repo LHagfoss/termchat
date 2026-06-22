@@ -1,6 +1,7 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::theme::{COMMANDS, THEME_NAMES};
+use super::emoji;
 
 pub fn is_fuzzy_match(query: &str, target: &str) -> bool {
     let query_lower = query.to_lowercase();
@@ -176,6 +177,20 @@ impl InputState {
                                         self.cursor_index = self.buffer.len();
                                     }
                                 }
+                            } else if word.starts_with(':') && !word.ends_with(':') {
+                                let query = &word[1..];
+                                if !query.is_empty() {
+                                    if let Some(matched) = super::emoji::EMOJI_SHORTCODES
+                                        .iter()
+                                        .find(|sc| sc.starts_with(query))
+                                    {
+                                        let rest = &matched[query.len()..];
+                                        self.buffer.extend(":".chars());
+                                        self.buffer.extend(rest.chars());
+                                        self.buffer.extend(":".chars());
+                                        self.cursor_index = self.buffer.len();
+                                    }
+                                }
                             }
                         }
                     }
@@ -288,6 +303,29 @@ impl InputState {
                                 .iter()
                                 .filter(|cmd| is_fuzzy_match(&word, cmd))
                                 .map(|s| s.to_string())
+                                .collect();
+
+                            if !matches.is_empty() {
+                                self.tab_matches = matches;
+                                self.tab_index = Some(0);
+
+                                let mut new_buf = self.pre_tab_buffer[..word_start].to_vec();
+                                new_buf.extend(self.tab_matches[0].chars());
+                                new_buf.extend(&self.pre_tab_buffer[current_cursor..]);
+                                self.buffer = new_buf;
+                                self.cursor_index =
+                                    word_start + self.tab_matches[0].chars().count();
+                            }
+                        } else if word.starts_with(':') {
+                            let query = &word[1..]; // strip leading ':'
+                            self.pre_tab_buffer = self.buffer.clone();
+                            self.pre_tab_cursor = current_cursor;
+                            self.tab_word_start = Some(word_start);
+
+                            let matches: Vec<String> = emoji::EMOJI_SHORTCODES
+                                .iter()
+                                .filter(|sc| is_fuzzy_match(query, sc))
+                                .map(|sc| format!(":{}:", sc))
                                 .collect();
 
                             if !matches.is_empty() {

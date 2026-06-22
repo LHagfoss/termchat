@@ -182,6 +182,30 @@ const EMOJI_MAP: &[(&str, &str)] = &[
     ("white_frowning_face", "\u{2639}\u{FE0F}"),
 ];
 
+/// Emoji shortcodes sorted alphabetically for autocomplete.
+pub const EMOJI_SHORTCODES: &[&str] = &[
+    "anger", "angry", "ant", "apple", "astonished", "back", "banana", "bee",
+    "blossom", "blue_heart", "blush", "bomb", "boom", "bouquet", "broken_heart", "bug",
+    "cactus", "call_me_hand", "cherries", "cherry_blossom", "clap", "cold_sweat", "collision", "confounded",
+    "confused", "cool", "copyright", "crossed_fingers", "cry", "deciduous_tree", "disappointed", "drooling_face",
+    "ear_of_rice", "end", "evergreen_tree", "exclamation", "exploding_head", "fallen_leaf", "fast_forward", "fearful",
+    "flushed", "flying_saucer", "four_leaf_clover", "go_on", "grapes", "green_apple", "green_heart", "grey_exclamation",
+    "grey_question", "grin", "grinning", "heart", "heart_eyes", "heartbeat", "heartpulse", "hearts",
+    "herb", "hibiscus", "hot_pepper", "hugging_face", "hushed", "innocent", "joy", "kissing_heart",
+    "large_blue_circle", "laughing", "leaves", "liar", "love_you_gesture", "lying_face", "mandarin", "maple_leaf",
+    "metal", "middle_finger", "money_mouth_face", "muscle", "nail_care", "nerd_face", "new", "ok_hand",
+    "on", "open_mouth", "orange_heart", "palm_tree", "peace", "peach", "pear", "pensive",
+    "persevere", "pinching_hands", "pineapple", "pleading_face", "please", "point_down", "point_left", "point_right",
+    "point_up", "point_up_2", "pray", "purple_heart", "question", "rage", "raised_back_of_hand", "raised_hand",
+    "recycle", "red_circle", "registered", "relaxed", "reversed_hand_with_middle_finger_extended", "revolving_hearts", "rofl", "rose",
+    "rosette", "salad", "scream", "seedling", "selfie", "shamrock", "shocked", "shushing_face",
+    "smile", "smiley", "smirk", "snail", "snowflake", "sob", "soon", "sparkles",
+    "sparkling_heart", "speech_balloon", "star", "star_struck", "stars", "stuck_out_tongue", "stuck_out_tongue_closed_eyes", "stuck_out_tongue_winking_eye",
+    "sunflower", "sunglasses", "sweat_smile", "thinking_face", "thought_balloon", "thumbsdown", "thumbsup", "tm",
+    "tomato", "tulip", "two_hearts", "unamused", "up", "v", "warning", "watermelon",
+    "wave", "wheelchair", "white_flower", "white_frowning_face", "wilted_flower", "wink", "worried", "writing_hand",
+    "yellow_heart", "yum", "zzz",];
+
 /// Build a lookup HashMap from the static slice.
 fn build_map() -> HashMap<&'static str, &'static str> {
     let mut map = HashMap::with_capacity(EMOJI_MAP.len());
