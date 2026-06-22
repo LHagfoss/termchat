@@ -38,6 +38,11 @@ pub enum ServerToClient {
         users: Vec<String>,
     },
     Pong,
+    Notification {
+        targets: Vec<String>,
+        content: String,
+        timestamp: DateTime<Utc>,
+    },
     FileAvailable {
         id: String,
         filename: String,

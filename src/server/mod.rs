@@ -293,7 +293,7 @@ async fn handle_client(
                              let sender_color = state.user_colors.lock().await.get(&username).cloned();
                              let broadcast_msg = ServerToClient::Broadcast {
                                  sender: username.clone(),
-                                 content,
+                                 content: content.clone(),
                                  timestamp: chrono::Utc::now(),
                                  sender_color,
                              };
@@ -301,6 +301,52 @@ async fn handle_client(
                                  server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
                              }
                              let _ = state.tx.send(broadcast_msg);
+
+                            // Detect @mentions and send private notifications to targeted users
+                            {
+                                let online_users = state.users.lock().await.clone();
+                                let mentioned_targets: Vec<String> = content.split_whitespace()
+                                    .filter_map(|token| {
+                                        let chars: Vec<char> = token.chars().collect();
+                                        if let Some(at_idx) = chars.iter().position(|&c| c == '@') {
+                                            if at_idx > 0 {
+                                                return None;
+                                            }
+                                            if at_idx + 1 < chars.len() && chars[at_idx + 1].is_alphanumeric() {
+                                                let leading_ok = chars[..at_idx]
+                                                    .iter()
+                                                    .all(|&c| !c.is_alphanumeric() && c != '@');
+                                                if leading_ok {
+                                                    let mut username_chars = Vec::new();
+                                                    for &c in &chars[at_idx + 1..] {
+                                                        if c.is_alphanumeric() || c == '_' || c == '-' {
+                                                            username_chars.push(c);
+                                                        } else {
+                                                            break;
+                                                        }
+                                                    }
+                                                    return Some(username_chars.into_iter().collect::<String>());
+                                                }
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .filter(|mentioned| {
+                                        online_users.iter()
+                                            .any(|u| u.eq_ignore_ascii_case(mentioned))
+                                            && mentioned != username.as_str()
+                                    })
+                                    .collect();
+
+                                if !mentioned_targets.is_empty() {
+                                    let notification = ServerToClient::Notification {
+                                        targets: mentioned_targets,
+                                        content: format!("[{}]: {}", username, content),
+                                        timestamp: chrono::Utc::now(),
+                                    };
+                                    let _ = state.tx.send(notification);
+                                }
+                            }
                         }
                         ClientToServer::Typing { is_typing } => {
                             let broadcast_msg = ServerToClient::UserTyping {

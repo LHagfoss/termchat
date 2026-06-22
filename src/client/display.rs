@@ -351,7 +351,8 @@ pub fn print_message(
             };
             let (highlighted_content, has_self_mention) =
                 highlight_mentions(content, own_username, online_users, colors);
-            let normalized = highlighted_content
+            let emoji_rendered = super::emoji::render_emojis(&highlighted_content);
+            let normalized = emoji_rendered
                 .replace("\r\n", "\n")
                 .replace('\n', "\r\n");
             print!(
@@ -364,6 +365,24 @@ pub fn print_message(
                 print!("\x07");
                 let _ = io::stdout().flush();
             }
+        }
+        ServerToClient::Notification { targets, content, timestamp } => {
+            // Only display if the current user is mentioned
+            let is_target = targets.iter()
+                .any(|t| t.eq_ignore_ascii_case(own_username));
+            if !is_target {
+                return;
+            }
+            let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
+            let emoji_rendered = super::emoji::render_emojis(content);
+            print!(
+                "\r\n {} {} 📢 {}\r\n",
+                local_time.to_string().dimmed(),
+                "⚡".yellow().bold(),
+                emoji_rendered.yellow().bold()
+            );
+            print!("\x07");
+            let _ = io::stdout().flush();
         }
         ServerToClient::SystemAlert { content, .. } => {
             let normalized = content.replace("\r\n", "\n").replace('\n', "\r\n");
@@ -424,6 +443,7 @@ pub fn print_message(
             );
         }
         ServerToClient::FileAvailable { id, filename, size_bytes, sender, timestamp } => {
+            let emoji_filename = super::emoji::render_emojis(filename);
             let local_time = timestamp.with_timezone(&chrono::Local).format("%H:%M");
             let display_name = format_username(sender);
             let colored_name = get_colored_name(&display_name);
@@ -433,7 +453,7 @@ pub fn print_message(
                 local_time.to_string().dimmed(),
                 colored_name,
                 "📎".truecolor(colors.accent.0, colors.accent.1, colors.accent.2),
-                filename.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
+                emoji_filename.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
                 size_str.dimmed(),
                 id.truecolor(colors.accent.0, colors.accent.1, colors.accent.2).bold(),
             );

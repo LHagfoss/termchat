@@ -1,4 +1,5 @@
 pub mod display;
+pub mod emoji;
 pub mod input;
 pub mod theme;
 
