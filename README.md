@@ -2,7 +2,8 @@
 
 A fast, asynchronous, bi-directional chat server and client built entirely for the terminal.
 
-<img src="./image.png" alt="termchat in action" />
+<img src="./image-client.png" alt="termchat in action" />
+<img src="./image-server.png" alt="termchat in action" />
 
 ## Features
 
