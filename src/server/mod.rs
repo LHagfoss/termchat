@@ -2,28 +2,39 @@ pub mod ollama;
 pub mod state;
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use colored::Colorize;
 use futures::{SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::signal;
 use tokio::sync::broadcast;
 use tokio_util::codec::{Framed, LinesCodec};
+use std::time::{Duration, Instant};
+use crossterm::terminal;
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph, BorderType},
+    Frame, Terminal,
+};
 
 use crate::protocol::{ClientToServer, ServerToClient};
 use state::{ServerState, StoredFile};
 
+// Thread-safe global server log storage
+pub static SERVER_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 #[macro_export]
 macro_rules! server_log {
     ($level:ident, $($arg:tt)*) => {
-        let prefix = match stringify!($level) {
-            "Info" => "Info".green().bold(),
-            "Warn" => "Warn".yellow().bold(),
-            "Error" => "Error".red().bold(),
-            other => other.white().bold(),
-        };
-        println!("   {} {}", prefix, format!($($arg)*));
+        let formatted = format!($($arg)*);
+        let prefix = stringify!($level);
+        let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+        let log_line = format!("[{}] [{}] {}", timestamp, prefix, formatted);
+        if let Ok(mut logs) = $crate::server::SERVER_LOGS.lock() {
+            logs.push(log_line);
+        }
     };
 }
 
@@ -45,21 +56,34 @@ fn copy_to_clipboard(text: &str) -> bool {
     false
 }
 
-pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
-    println!();
-    println!("   {}", r"████████╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ ".truecolor(236, 110, 93).bold());
-    println!("   {}", r"╚══██╔══╝██╔════╝    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗".truecolor(236, 110, 93).bold());
-    println!("   {}", r"   ██║   ██║         ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝".truecolor(236, 110, 93).bold());
-    println!("   {}", r"   ██║   ██║         ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗".truecolor(236, 110, 93).bold());
-    println!("   {}", r"   ██║   ╚██████╗    ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║".truecolor(236, 110, 93).bold());
-    println!("   {}", r"   ╚═╝    ╚═════╝    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝".truecolor(236, 110, 93).bold());
-    println!();
+pub fn get_hash_color(name: &str) -> Color {
+    let mut hash = 0u32;
+    for c in name.chars() {
+        hash = hash.wrapping_add(c as u32).wrapping_mul(31);
+    }
+    let colors = [
+        Color::Red,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::Magenta,
+        Color::Cyan,
+        Color::LightRed,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightBlue,
+        Color::LightMagenta,
+        Color::LightCyan,
+    ];
+    colors[(hash as usize) % colors.len()]
+}
 
+pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
     let listener = TcpListener::bind(&addr).await?;
-
     let token = generate_token();
 
+    // Initialize logs
     server_log!(Info, "Server '{}' initialized", name);
     server_log!(Info, "Listening on {}", addr);
 
@@ -76,70 +100,281 @@ pub async fn run(name: String, ip: String, port: u16, debug: bool) -> Result<(),
         history: tokio::sync::Mutex::new(std::collections::VecDeque::with_capacity(20)),
         files: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         user_colors: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        total_messages: std::sync::atomic::AtomicUsize::new(0),
     });
 
-    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
-    let token_clone = token.clone();
+
+
+    // Setup TUI mode
+    let mut stdout = io::stdout();
+    terminal::enable_raw_mode()?;
+    crossterm::execute!(stdout, terminal::EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let startup_time = Instant::now();
+    let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
+
+    // Spawn Crossterm event reader thread for server to handle keyboard inputs (Ctrl+C)
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<crossterm::event::Event>(100);
     std::thread::spawn(move || {
-        use std::io::BufRead;
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            if let Ok(line) = line {
-                let trimmed = line.trim();
-                if trimmed.eq_ignore_ascii_case("c") || trimmed.eq_ignore_ascii_case("copy") {
-                    if input_tx.blocking_send(token_clone.clone()).is_err() {
+        loop {
+            match crossterm::event::read() {
+                Ok(evt) => {
+                    if event_tx.blocking_send(evt).is_err() {
                         break;
                     }
                 }
-            } else {
-                break;
+                Err(_) => break,
             }
         }
     });
 
     loop {
+        // Fetch snapshot of state for drawing
+        let active_users = {
+            let u = state.users.lock().await;
+            u.iter().cloned().collect::<Vec<String>>()
+        };
+        let files_count = {
+            let f = state.files.lock().await;
+            f.len()
+        };
+        let chat_history = {
+            let h = state.history.lock().await;
+            h.iter().cloned().collect::<Vec<String>>()
+        };
+        let logs = {
+            if let Ok(l) = SERVER_LOGS.lock() {
+                l.clone()
+            } else {
+                Vec::new()
+            }
+        };
+        let total_msg = state.total_messages.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Draw Dashboard Frame
+        let server_state_clone = Arc::clone(&state);
+        let addr_clone = addr.clone();
+        terminal.draw(|f| {
+            draw_server_ui(
+                f,
+                &server_state_clone,
+                startup_time,
+                &active_users,
+                files_count,
+                &chat_history,
+                &logs,
+                &addr_clone,
+                total_msg,
+            );
+        })?;
+
         tokio::select! {
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok((stream, peer_addr)) => {
-                                server_log!(Info, "Connection attempt received from {}", peer_addr);
+            _ = tick_interval.tick() => {
+                // Tick interval redraw
+            }
 
-                                let state_clone = Arc::clone(&state);
-                                tokio::spawn(async move {
-                                    if let Err(e) = handle_client(stream, state_clone).await {
-                                        server_log!(Warn, "Connection with {} dropped: {}", peer_addr, e);
-                                    }
-                                });
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, peer_addr)) => {
+                        server_log!(Info, "Connection attempt received from peer: {}", peer_addr);
+
+                        let state_clone = Arc::clone(&state);
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_client(stream, state_clone).await {
+                                server_log!(Warn, "Connection with peer {} dropped: {}", peer_addr, e);
                             }
-                            Err(e) => {
-                                server_log!(Error, "Failed to accept connection: {}", e);
-                            }
-                        }
+                        });
                     }
-                    Some(token_to_copy) = input_rx.recv() => {
-                        if copy_to_clipboard(&token_to_copy) {
-                            server_log!(Info, "Secure token copied to clipboard successfully!");
-                        } else {
-                            server_log!(Warn, "Failed to copy token to clipboard.");
-                        }
+                    Err(e) => {
+                        server_log!(Error, "Failed to accept connection: {}", e);
                     }
-                    _ = signal::ctrl_c() => {
+                }
+            }
+
+            Some(evt) = event_rx.recv() => {
+                if let crossterm::event::Event::Key(key) = evt {
+                    if key.code == crossterm::event::KeyCode::Char('c') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
                         server_log!(Info, "Stopping server...");
-
                         let shutdown_alert = ServerToClient::SystemAlert {
                             content: "Server is shutting down...".to_string(),
                             timestamp: chrono::Utc::now(),
                         };
                         let _ = state.tx.send(shutdown_alert);
-
                         break;
                     }
                 }
+            }
+
+            _ = tokio::signal::ctrl_c() => {
+                server_log!(Info, "Stopping server (external signal)...");
+
+                let shutdown_alert = ServerToClient::SystemAlert {
+                    content: "Server is shutting down...".to_string(),
+                    timestamp: chrono::Utc::now(),
+                };
+                let _ = state.tx.send(shutdown_alert);
+                break;
+            }
+        }
     }
 
-    server_log!(Info, "Success! Stopped server successfully.");
+    // Restore terminal
+    terminal::disable_raw_mode()?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        terminal::LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+
+    println!("Server shutdown successfully.");
     Ok(())
 }
+
+fn draw_server_ui(
+    f: &mut Frame,
+    state: &ServerState,
+    startup_time: Instant,
+    active_users: &[String],
+    files_count: usize,
+    chat_history: &[String],
+    logs: &[String],
+    addr: &str,
+    total_messages: usize,
+) {
+    let title_color = Color::Rgb(236, 110, 93); // Sunset Coral theme
+
+    // Layout
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(5),    // Main Panels
+            Constraint::Length(3), // Stats bottom panel
+        ])
+        .split(f.area());
+
+    // 1. Header Block
+    let uptime = format_uptime(startup_time.elapsed());
+    let header_text = format!(
+        "  TermChat Server Dashboard  |  Host: {}  |  Uptime: {}  |  Secure Token: {}",
+        addr, uptime, state.token
+    );
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(header_text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(title_color)),
+    );
+    f.render_widget(header, chunks[0]);
+
+    // 2. Main horizontal panels
+    let main_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(38), // Chat History
+            Constraint::Percentage(44), // Server Logs
+            Constraint::Percentage(18), // Connected Users
+        ])
+        .split(chunks[1]);
+
+    // Chat History Box
+    let chat_lines: Vec<ListItem> = chat_history
+        .iter()
+        .map(|msg| {
+            // Trim newlines if any
+            let clean_msg = msg.replace("\r\n", " ").replace('\n', " ");
+            ListItem::new(Line::from(vec![Span::raw(clean_msg)]))
+        })
+        .collect();
+    let chat_list = List::new(chat_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(title_color))
+            .title(" Recent Chat History "),
+    );
+    f.render_widget(chat_list, main_layout[0]);
+
+    // Server Logs Box
+    let log_lines: Vec<ListItem> = logs
+        .iter()
+        .map(|log| {
+            let style = if log.contains("[Error]") {
+                Style::default().fg(Color::Red)
+            } else if log.contains("[Warn]") {
+                Style::default().fg(Color::Yellow)
+            } else if log.contains("[Debug]") {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            ListItem::new(Line::from(vec![Span::styled(log.to_string(), style)]))
+        })
+        .collect();
+    let log_list = List::new(log_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(title_color))
+            .title(" Server Event Logs "),
+    );
+    f.render_widget(log_list, main_layout[1]);
+
+    // Connected Users Box
+    let user_items: Vec<ListItem> = active_users
+        .iter()
+        .map(|user| {
+            let color = get_hash_color(user);
+            ListItem::new(Line::from(vec![
+                Span::styled("• ", Style::default().fg(Color::DarkGray)),
+                Span::styled(user.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            ]))
+        })
+        .collect();
+    let users_list = List::new(user_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(title_color))
+            .title(format!(" Active ({}) ", active_users.len())),
+    );
+    f.render_widget(users_list, main_layout[2]);
+
+    // 3. Stats Panel
+    let stats_text = format!(
+        "  Online Users: {}   |   Files Shared: {}   |   Total Messages Exchanged: {}   |   AI Ollama Debug: {}",
+        active_users.len(),
+        files_count,
+        total_messages,
+        if state.debug { "ENABLED" } else { "DISABLED" }
+    );
+    let stats_para = Paragraph::new(Line::from(vec![
+        Span::styled(stats_text, Style::default().fg(Color::White)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(title_color))
+            .title(" Live Metrics "),
+    );
+    f.render_widget(stats_para, chunks[2]);
+}
+
+fn format_uptime(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let secs = secs % 60;
+    format!("{:02}:{:02}:{:02}", hours, mins, secs)
+}
+
+use std::io;
 
 async fn handle_client(
     stream: TcpStream,
@@ -248,112 +483,65 @@ async fn handle_client(
                                     if let Ok(json) = serde_json::to_string(&alert) {
                                         let _ = framed.send(json).await;
                                     }
-                                } else {
-                                    server_log!(Info, "User '{}' ran command '/ask' with question: '{}'", username, question);
-                                    let ask_display = format!("asked Ollama: \"{}\"", question);
-                                    let sender_color = state.user_colors.lock().await.get(&username).cloned();
-                                    let broadcast_msg = ServerToClient::Broadcast {
-                                        sender: username.clone(),
-                                        content: ask_display,
-                                        timestamp: chrono::Utc::now(),
-                                        sender_color,
-                                    };
-                                    let _ = state.tx.send(broadcast_msg);
+                                    continue;
+                                }
 
-                                    let thinking_msg = ServerToClient::SystemAlert {
-                                         content: format!("Info: Ollama is thinking (generating response for '{}')...", username),
-                                         timestamp: chrono::Utc::now(),
-                                     };
-                                     let _ = state.tx.send(thinking_msg);
+                                server_log!(Info, "User '{}' ran command '/ask' with question: '{}'", username, question);
+                                state.total_messages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-                                    // Add the ask to history
-                                    {
-                                        let mut hist = state.history.lock().await;
-                                        if hist.len() >= 20 {
-                                            hist.pop_front();
-                                        }
-                                        hist.push_back(format!("{}: asked Ollama: \"{}\"", username, question));
+                                let broadcast_msg = ServerToClient::Broadcast {
+                                    sender: username.clone(),
+                                    content: content.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                    sender_color: state.user_colors.lock().await.get(&username).cloned(),
+                                };
+
+                                {
+                                    let mut hist = state.history.lock().await;
+                                    if hist.len() >= 20 {
+                                        hist.pop_front();
                                     }
-
-                                    tokio::spawn(ollama::handle_ask(question, username.clone(), state.clone()));
+                                    hist.push_back(format!("{}: {}", username, content));
                                 }
-                                continue;
-                            }
 
-                            // Add regular message to history
-                            {
-                                let mut hist = state.history.lock().await;
-                                if hist.len() >= 20 {
-                                    hist.pop_front();
+                                let _ = state.tx.send(broadcast_msg);
+
+                                let state_clone = Arc::clone(&state);
+                                let username_clone = username.clone();
+                                tokio::spawn(async move {
+                                    ollama::handle_ask(question, username_clone, state_clone).await;
+                                });
+                            } else {
+                                server_log!(Info, "User '{}' sent chat message: '{}'", username, content);
+                                state.total_messages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                                let broadcast_msg = ServerToClient::Broadcast {
+                                    sender: username.clone(),
+                                    content,
+                                    timestamp: chrono::Utc::now(),
+                                    sender_color: state.user_colors.lock().await.get(&username).cloned(),
+                                };
+
+                                {
+                                    let mut hist = state.history.lock().await;
+                                    if hist.len() >= 20 {
+                                        hist.pop_front();
+                                    }
+                                    hist.push_back(format!("{}: {}", username, broadcast_msg.clone().content()));
                                 }
-                                hist.push_back(format!("{}: {}", username, content));
-                            }
 
-                            server_log!(Info, "User '{}' sent chat message: '{}'", username, content);
-                             let sender_color = state.user_colors.lock().await.get(&username).cloned();
-                             let broadcast_msg = ServerToClient::Broadcast {
-                                 sender: username.clone(),
-                                 content: content.clone(),
-                                 timestamp: chrono::Utc::now(),
-                                 sender_color,
-                             };
-                             if state.debug {
-                                 server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
-                             }
-                             let _ = state.tx.send(broadcast_msg);
-
-                            // Detect @mentions and send private notifications to targeted users
-                            {
-                                let online_users = state.users.lock().await.clone();
-                                let mentioned_targets: Vec<String> = content.split_whitespace()
-                                    .filter_map(|token| {
-                                        let chars: Vec<char> = token.chars().collect();
-                                        if let Some(at_idx) = chars.iter().position(|&c| c == '@') {
-                                            if at_idx > 0 {
-                                                return None;
-                                            }
-                                            if at_idx + 1 < chars.len() && chars[at_idx + 1].is_alphanumeric() {
-                                                let leading_ok = chars[..at_idx]
-                                                    .iter()
-                                                    .all(|&c| !c.is_alphanumeric() && c != '@');
-                                                if leading_ok {
-                                                    let mut username_chars = Vec::new();
-                                                    for &c in &chars[at_idx + 1..] {
-                                                        if c.is_alphanumeric() || c == '_' || c == '-' {
-                                                            username_chars.push(c);
-                                                        } else {
-                                                            break;
-                                                        }
-                                                    }
-                                                    return Some(username_chars.into_iter().collect::<String>());
-                                                }
-                                            }
-                                        }
-                                        None
-                                    })
-                                    .filter(|mentioned| {
-                                        online_users.iter()
-                                            .any(|u| u.eq_ignore_ascii_case(mentioned))
-                                            && mentioned != username.as_str()
-                                    })
-                                    .collect();
-
-                                if !mentioned_targets.is_empty() {
-                                    let notification = ServerToClient::Notification {
-                                        targets: mentioned_targets,
-                                        content: format!("[{}]: {}", username, content),
-                                        timestamp: chrono::Utc::now(),
-                                    };
-                                    let _ = state.tx.send(notification);
+                                if state.debug {
+                                     server_log!(Debug, "Broadcasting from '{}': {:?}", username, broadcast_msg);
                                 }
+                                let _ = state.tx.send(broadcast_msg);
                             }
                         }
                         ClientToServer::Typing { is_typing } => {
-                            let broadcast_msg = ServerToClient::UserTyping {
+                            let typing_msg = ServerToClient::UserTyping {
                                 sender: username.clone(),
                                 is_typing,
                             };
-                            let _ = state.tx.send(broadcast_msg);
+                            let _ = state.tx.send(typing_msg);
                         }
                         ClientToServer::Ping => {
                             let pong = ServerToClient::Pong;
@@ -362,94 +550,78 @@ async fn handle_client(
                             }
                         }
                         ClientToServer::FileUpload { filename, data } => {
-                            const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
-                            match B64.decode(&data) {
-                                Ok(raw) if raw.len() <= MAX_FILE_BYTES => {
-                                    let safe_name = std::path::Path::new(&filename)
-                                        .file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("file")
-                                        .to_string();
-                                    let size = raw.len();
-                                    let id = generate_file_id();
-                                    server_log!(Info, "User '{}' uploaded '{}' ({} bytes) → id {}", username, safe_name, size, id);
-                                    state.files.lock().await.insert(id.clone(), StoredFile {
-                                        filename: safe_name.clone(),
-                                        data: raw,
-                                    });
-                                    let _ = state.tx.send(ServerToClient::FileAvailable {
-                                        id,
-                                        filename: safe_name,
-                                        size_bytes: size,
-                                        sender: username.clone(),
-                                        timestamp: chrono::Utc::now(),
-                                    });
-                                }
-                                Ok(_) => {
-                                    let err = ServerToClient::Error {
-                                        message: format!("File too large (max {}MB)", MAX_FILE_BYTES / 1024 / 1024),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&err) {
-                                        let _ = framed.send(json).await;
-                                    }
-                                }
-                                Err(_) => {
-                                    let err = ServerToClient::Error {
-                                        message: "Failed to decode file data".to_string(),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&err) {
-                                        let _ = framed.send(json).await;
-                                    }
-                                }
+                            let clean_filename = std::path::Path::new(&filename)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("file")
+                                .to_string();
+                            let safe_name = clean_filename.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "");
+                            if let Ok(raw) = B64.decode(&data) {
+                                let id = generate_file_id();
+                                let size = raw.len();
+
+                                state.files.lock().await.insert(id.clone(), StoredFile {
+                                    filename: safe_name.clone(),
+                                    data: raw,
+                                });
+
+                                server_log!(Info, "User '{}' uploaded '{}' ({} bytes) → id {}", username, safe_name, size, id);
+
+                                let file_alert = ServerToClient::FileAvailable {
+                                    id,
+                                    filename: safe_name,
+                                    size_bytes: size,
+                                    sender: username.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                let _ = state.tx.send(file_alert);
                             }
                         }
                         ClientToServer::FileRequest { id } => {
-                            let files = state.files.lock().await;
-                            if let Some(file) = files.get(&id) {
-                                let msg = ServerToClient::FileData {
-                                    id: id.clone(),
-                                    filename: file.filename.clone(),
-                                    data: B64.encode(&file.data),
+                            let file_opt = {
+                                let files = state.files.lock().await;
+                                files.get(&id).map(|f| (f.filename.clone(), B64.encode(&f.data)))
+                            };
+
+                            if let Some((filename, data)) = file_opt {
+                                server_log!(Info, "User '{}' downloaded file id {}", username, id);
+                                let response = ServerToClient::FileData {
+                                    id,
+                                    filename,
+                                    data,
                                 };
-                                drop(files);
-                                if let Ok(json) = serde_json::to_string(&msg) {
+                                if let Ok(json) = serde_json::to_string(&response) {
                                     let _ = framed.send(json).await;
                                 }
                             } else {
-                                drop(files);
-                                let err = ServerToClient::Error {
-                                    message: format!("File '{}' not found (session may have ended)", id),
+                                server_log!(Warn, "User '{}' requested non-existent file id {}", username, id);
+                                let err_alert = ServerToClient::Error {
+                                    message: format!("File with ID '{}' not found", id),
                                 };
-                                if let Ok(json) = serde_json::to_string(&err) {
+                                if let Ok(json) = serde_json::to_string(&err_alert) {
                                     let _ = framed.send(json).await;
                                 }
                             }
                         }
                         ClientToServer::SetColor { color } => {
-                            let mut colors = state.user_colors.lock().await;
                             if let Some(ref c) = color {
-                                colors.insert(username.clone(), c.clone());
                                 server_log!(Info, "User '{}' set color to '{}'", username, c);
-                                let info = ServerToClient::SystemAlert {
-                                    content: format!("Success: Changed your name color to '{}'", c),
-                                    timestamp: chrono::Utc::now(),
-                                };
-                                if let Ok(json) = serde_json::to_string(&info) {
-                                    let _ = framed.send(json).await;
-                                }
+                                state.user_colors.lock().await.insert(username.clone(), c.clone());
                             } else {
-                                colors.remove(&username);
                                 server_log!(Info, "User '{}' reset their color", username);
-                                let info = ServerToClient::SystemAlert {
-                                    content: "Success: Reset your name color".to_string(),
-                                    timestamp: chrono::Utc::now(),
-                                };
-                                if let Ok(json) = serde_json::to_string(&info) {
-                                    let _ = framed.send(json).await;
-                                }
+                                state.user_colors.lock().await.remove(&username);
                             }
+
+                            // Force list refresh to sync colors
+                            let active_users = {
+                                let u = state.users.lock().await;
+                                u.iter().cloned().collect::<Vec<String>>()
+                            };
+                            let _ = state.tx.send(ServerToClient::UsersList { users: active_users });
                         }
-                        _ => {}
+                        ClientToServer::Handshake { .. } => {
+                            // Already handshaked, ignore
+                        }
                     }
                 }
             }
@@ -525,4 +697,17 @@ fn generate_token() -> String {
         token.push(charset.chars().nth(idx).unwrap());
     }
     token.to_uppercase()
+}
+
+// Add content getter helper for Broadcast in mod.rs locally since we need it in server
+impl ServerToClient {
+    fn content(self) -> String {
+        match self {
+            ServerToClient::Broadcast { content, .. } => content,
+            ServerToClient::Notification { content, .. } => content,
+            ServerToClient::SystemAlert { content, .. } => content,
+            ServerToClient::Error { message } => message,
+            _ => String::new(),
+        }
+    }
 }

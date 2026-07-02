@@ -2,6 +2,7 @@ use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::theme::{COMMANDS, THEME_NAMES};
 use super::emoji;
+use crate::protocol::ServerToClient;
 
 pub fn is_fuzzy_match(query: &str, target: &str) -> bool {
     let query_lower = query.to_lowercase();
@@ -16,6 +17,7 @@ pub fn is_fuzzy_match(query: &str, target: &str) -> bool {
     true
 }
 
+#[allow(dead_code)]
 pub fn get_visible_prompt_and_cursor(
     buffer: &[char],
     cursor_index: usize,
@@ -57,10 +59,17 @@ pub struct InputState {
     pub theme_name: String,
     pub online_users: Vec<String>,
     pub debug: bool,
+    pub messages: Vec<ServerToClient>,
+    pub auto_scroll: bool,
+    pub scroll_offset: usize,
+    pub typing_users: std::collections::HashMap<String, std::time::Instant>,
+    pub sidebar_collapsed: bool,
 }
 
 impl InputState {
     pub fn new(theme_name: String) -> Self {
+        let config = crate::config::load_or_create_config();
+        let sidebar_collapsed = config.sidebar_collapsed.unwrap_or(false);
         Self {
             buffer: Vec::new(),
             cursor_index: 0,
@@ -76,6 +85,11 @@ impl InputState {
             theme_name,
             online_users: Vec::new(),
             debug: false,
+            messages: Vec::new(),
+            auto_scroll: true,
+            scroll_offset: 0,
+            typing_users: std::collections::HashMap::new(),
+            sidebar_collapsed,
         }
     }
 
@@ -372,17 +386,23 @@ impl InputState {
             }
             KeyCode::Enter => {
                 self.show_help = false;
-                let content: String = self.buffer.iter().collect();
-                self.buffer.clear();
-                self.cursor_index = 0;
-                self.history_index = None;
-                if !content.trim().is_empty() {
-                    if self.history.last() != Some(&content) {
-                        self.history.push(content.clone());
-                    }
-                    Some(content)
-                } else {
+                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.buffer.insert(self.cursor_index, '\n');
+                    self.cursor_index += 1;
                     None
+                } else {
+                    let content: String = self.buffer.iter().collect();
+                    self.buffer.clear();
+                    self.cursor_index = 0;
+                    self.history_index = None;
+                    if !content.trim().is_empty() {
+                        if self.history.last() != Some(&content) {
+                            self.history.push(content.clone());
+                        }
+                        Some(content)
+                    } else {
+                        None
+                    }
                 }
             }
             _ => None,

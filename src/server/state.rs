@@ -16,4 +16,5 @@ pub struct ServerState {
     pub history: Mutex<VecDeque<String>>,
     pub files: Mutex<HashMap<String, StoredFile>>,
     pub user_colors: Mutex<HashMap<String, String>>,
+    pub total_messages: std::sync::atomic::AtomicUsize,
 }
