@@ -1,4 +1,3 @@
-use colored::Colorize;
 use std::sync::Arc;
 
 use crate::protocol::ServerToClient;
