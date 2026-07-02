@@ -947,15 +947,7 @@ fn draw_ui(
 
     let chat_area = main_layout[0];
 
-    // Split chat area into content + typing indicator row (no borders on chat)
-    let chat_split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(chat_area);
-    let chat_content_area = chat_split[0];
-    let typing_indicator_area = chat_split[1];
-
-    // Horizontal padding inside chat content
+    // Horizontal padding inside chat content (inner excludes border rows)
     let chat_inner_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -963,7 +955,7 @@ fn draw_ui(
             Constraint::Min(1),    // Text area
             Constraint::Length(2), // Right padding
         ])
-        .split(chat_content_area);
+        .split(chat_area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }));
 
     let text_area = chat_inner_layout[1];
     let chat_width = text_area.width as usize;
@@ -987,7 +979,34 @@ fn draw_ui(
     let end_idx = total_lines.saturating_sub(current_scroll);
     let visible_lines = all_wrapped_lines[start_idx..end_idx].to_vec();
 
-    // Render chat lines (no borders on chat room)
+    // Typing indicator for chat block title_bottom
+    let typing_users: Vec<&String> = state.typing_users.keys().filter(|&u| u.as_str() != name).collect();
+    let mut chat_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(title_color))
+        .title(Span::styled(" Chat History ", Style::default().fg(title_color).add_modifier(Modifier::BOLD)));
+
+    if !typing_users.is_empty() {
+        let dots = match (start_time.elapsed().as_millis() / 150) % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        };
+        let indicator_text = match typing_users.len() {
+            1 => format!(" {} is typing{} ", typing_users[0], dots),
+            2 => format!(" {}, {} are typing{} ", typing_users[0], typing_users[1], dots),
+            _ => format!(" {} users are typing{} ", typing_users.len(), dots),
+        };
+        chat_block = chat_block.title_bottom(
+            Span::styled(indicator_text, Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))
+        );
+    }
+
+    f.render_widget(chat_block, chat_area);
+
+    // Render chat lines
     let chat_para = Paragraph::new(visible_lines);
     f.render_widget(chat_para, text_area);
 
@@ -1001,27 +1020,11 @@ fn draw_ui(
             .style(Style::default().fg(accent_color));
 
         let mut scrollbar_state = ScrollbarState::new(max_scroll + 1).position(max_scroll - current_scroll);
-        f.render_stateful_widget(scrollbar, chat_content_area, &mut scrollbar_state);
-    }
-
-    // Typing indicator row (below chat content, above input)
-    let typing_users: Vec<&String> = state.typing_users.keys().filter(|&u| u.as_str() != name).collect();
-    if !typing_users.is_empty() {
-        let dots = match (start_time.elapsed().as_millis() / 150) % 4 {
-            0 => "",
-            1 => ".",
-            2 => "..",
-            _ => "...",
-        };
-        let indicator_text = match typing_users.len() {
-            1 => format!("  {} is typing{}", typing_users[0], dots),
-            2 => format!("  {}, {} are typing{}", typing_users[0], typing_users[1], dots),
-            _ => format!("  {} users are typing{}", typing_users.len(), dots),
-        };
-        let typing_para = Paragraph::new(Line::from(
-            Span::styled(indicator_text, Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))
-        ));
-        f.render_widget(typing_para, typing_indicator_area);
+        f.render_stateful_widget(
+            scrollbar,
+            chat_area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+            &mut scrollbar_state,
+        );
     }
 
     // Right Panel: Online Users (rendered only if not collapsed)
